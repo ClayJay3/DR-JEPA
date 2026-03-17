@@ -1,0 +1,5 @@
+python DR-JEPA6.py preprocess --data_dir data_synthetic_unicycle --output packed_dataset
+python DR-JEPA6.py train --dataset packed_dataset --epochs 100 --save_dir runs
+python DR-JEPA6.py viz --video data_synthetic_unicycle/crash_recovery_5.mp4 --checkpoint runs/best_jepa_v2.pth
+
+python deploy_live_rover.py --checkpoint runs/best_jepa_v2.pth

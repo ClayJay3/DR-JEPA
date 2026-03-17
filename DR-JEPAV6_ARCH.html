@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DR-JEPAv6 - Dual Mode Architecture</title>
+    <style>
+        :root {
+            --bg-color: #0b0f1a;
+            --card-bg: #1e293b;
+            --card-border: #334155;
+            --accent-blue: #3b82f6;
+            --accent-purple: #8b5cf6;
+            --accent-green: #10b981;
+            --accent-red: #ef4444;
+            --accent-orange: #f59e0b;
+            --text-main: #f1f5f9;
+            --text-sub: #94a3b8;
+            --pipe-color: #475569;
+            --tag-bg: rgba(15, 23, 42, 0.5);
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            margin: 0;
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        h1 { font-size: 1.8rem; margin: 0; font-weight: 700; letter-spacing: -0.02em; }
+        p { color: var(--text-sub); margin-top: 8px; }
+
+        .dashboard {
+            display: flex;
+            flex-direction: column;
+            gap: 80px;
+            width: 100%;
+            max-width: 1600px; 
+            padding-bottom: 100px;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: -30px;
+            padding-left: 20px;
+        }
+
+        .section-badge {
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .badge-train { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+        .badge-infer { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+
+        .pipeline-wrapper {
+            display: flex;
+            align-items: stretch;
+            gap: 50px;
+            position: relative;
+            padding: 50px;
+            background: rgba(30, 41, 59, 0.3);
+            border-radius: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            overflow-x: auto; /* Allow scrolling */
+        }
+
+        /* CARD STYLES */
+        .card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            padding: 0;
+            border: 1px solid var(--card-border);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+            position: relative;
+            z-index: 2;
+            width: 280px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.2s, border-color 0.2s;
+            overflow: hidden;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            border-color: var(--accent-blue);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+        }
+
+        /* JEPA SPECIFIC HIGHLIGHT */
+        .jepa-core {
+            border: 1px dashed var(--accent-orange);
+            box-shadow: 0 0 15px rgba(245, 158, 11, 0.1);
+        }
+        .jepa-core::before {
+            content: 'JEPA CORE';
+            position: absolute;
+            top: 2px;
+            right: 50%;
+            transform: translateX(50%);
+            font-size: 0.5rem;
+            color: var(--accent-orange);
+            font-weight: 900;
+            letter-spacing: 1px;
+            opacity: 0.8;
+        }
+
+        .card-top {
+            padding: 10px 14px;
+            background: rgba(0,0,0,0.2);
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .card-title { font-weight: 700; font-size: 0.85rem; color: var(--text-main); }
+
+        .card-badge {
+            font-size: 0.6rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.1);
+            color: var(--text-sub);
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .card-body {
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            flex-grow: 1;
+        }
+
+        .io-spec {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-family: 'Fira Code', monospace;
+            font-size: 0.65rem;
+            background: var(--tag-bg);
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .io-row { display: flex; justify-content: space-between; }
+        .io-label { color: var(--text-sub); font-weight: 600; margin-right: 6px; }
+        .io-val { color: var(--accent-blue); }
+
+        .desc-text { font-size: 0.75rem; color: var(--text-sub); line-height: 1.4; }
+        .desc-text strong { color: var(--text-main); font-weight: 600; }
+
+        /* VISUALIZATION BOXES */
+        .viz-box {
+            height: 50px;
+            background: rgba(15, 23, 42, 0.4);
+            border-radius: 8px;
+            border: 1px dashed var(--card-border);
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            margin-bottom: 4px;
+        }
+
+        /* Specific Visuals */
+        .viz-stack { width: 30px; height: 35px; background: #475569; border-radius: 3px; box-shadow: 3px 3px 0 #334155, 6px 6px 0 #1e293b; }
+        .viz-compass { width: 35px; height: 35px; border: 2px solid var(--accent-blue); border-radius: 50%; position: relative; }
+        .viz-compass::after { content: ''; position: absolute; top: 50%; left: 50%; width: 16px; height: 2px; background: var(--accent-red); transform: translate(-50%, -50%) rotate(-45deg); }
+        .viz-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; width: 35px; height: 35px; }
+        .viz-grid div { background: var(--accent-purple); opacity: 0.5; border-radius: 1px; }
+        .viz-transformer { display: flex; flex-direction: column; gap: 3px; }
+        .viz-transformer div { width: 35px; height: 5px; background: var(--accent-blue); border-radius: 2px; }
+        .viz-moe { display: flex; align-items: center; gap: 4px; }
+        .moe-gate { width: 8px; height: 8px; border-radius: 50%; background: #fff; }
+        .moe-experts { display: flex; flex-direction: column; gap: 3px; }
+        .moe-exp { width: 25px; height: 5px; background: var(--accent-green); border-radius: 2px; opacity: 0.4; }
+        .moe-exp.active { opacity: 1; background: var(--accent-green); }
+        .viz-critic { width: 40px; height: 25px; border-bottom: 2px solid #64748b; border-left: 2px solid #64748b; position: relative; }
+        .viz-critic::after { content: ''; position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; border-top-right-radius: 100%; border-top: 2px solid var(--accent-red); }
+
+        /* Border Accents */
+        .b-purple { border-top: 3px solid var(--accent-purple); }
+        .b-blue { border-top: 3px solid var(--accent-blue); }
+        .b-orange { border-top: 3px solid var(--accent-orange); }
+        .b-red { border-top: 3px solid var(--accent-red); }
+        .b-green { border-top: 3px solid var(--accent-green); }
+        .b-gray { border-left: 4px solid var(--text-sub); }
+
+        /* Columns */
+        .column { display: flex; flex-direction: column; gap: 24px; justify-content: center; }
+        .input-col { gap: 140px; }
+        .heads-col { gap: 24px; }
+        .targets-col { gap: 40px; margin-top: 160px; }
+
+        /* SVG */
+        .svg-layer {
+            position: absolute; top: 0; left: 0; 
+            /* Width/Height handled by JS to match ScrollWidth */
+            pointer-events: none; z-index: 1;
+        }
+        .path-line { fill: none; stroke: var(--pipe-color); stroke-width: 2; transition: all 0.3s; }
+        .path-line.flow { stroke: #60a5fa; stroke-dasharray: 6 8; animation: dash 1s linear infinite; }
+        /* Fix visibility of loss lines */
+        .path-line.loss { stroke: var(--accent-red); stroke-dasharray: 6 6; stroke-width: 3; opacity: 1; }
+        .path-line.target-link { stroke: var(--accent-orange); stroke-dasharray: 6 4; opacity: 0.6; }
+        .path-line.active { stroke: var(--text-main); stroke-width: 3; opacity: 1 !important; }
+        @keyframes dash { to { stroke-dashoffset: -14; } }
+        .path-label { position: absolute; background: #0f172a; border: 1px solid #334155; color: #94a3b8; font-size: 0.6rem; padding: 2px 6px; border-radius: 4px; transform: translate(-50%, -50%); z-index: 5; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>DR-JEPAv6 Architecture</h1>
+        <p>Joint-Embedding Predictive Architecture for Off-Road Navigation (v2.1 Features)</p>
+    </header>
+
+    <div class="dashboard">
+
+        <!-- ================= TRAINING ================= -->
+        <div class="section-header">
+            <span class="section-badge badge-train">Training Phase</span>
+            <p>Self-Supervised Learning (JEPA +3 Offset) + MoE Action Chunking</p>
+        </div>
+
+        <div class="pipeline-wrapper" id="train-pipe">
+            <svg class="svg-layer" id="svg-train"></svg>
+            <div id="labels-train"></div>
+
+            <!-- Col 1: Inputs -->
+            <div class="column input-col">
+                <div class="card b-gray" id="t-img">
+                    <div class="card-top"><span class="card-title">Sequence</span><span class="card-badge">Augmented</span></div>
+                    <div class="card-body">
+                        <div class="viz-box"><div class="viz-stack"></div></div>
+                        <div class="io-spec">
+                            <div class="io-row"><span class="io-label">In:</span><span class="io-val">(B, 20, 3, 224, 224)</span></div>
+                            <div class="io-row"><span class="io-label">Out:</span><span class="io-val">Same (Augmented)</span></div>
+                        </div>
+                        <div class="desc-text"><strong>Structure:</strong> Tensor Operation.<br><strong>Logic:</strong> Random Horizontal Flip (p=0.5) + Color Jitter (Bright/Cont/Sat/Hue).</div>
+                    </div>
+                </div>
+                <div class="card b-gray" id="t-ctx">
+                    <div class="card-top"><span class="card-title">Context</span><span class="card-badge">Nav</span></div>
+                    <div class="card-body">
+                        <div class="viz-box"><div class="viz-compass"></div></div>
+                        <div class="io-spec">
+                            <div class="io-row"><span class="io-label">In:</span><span class="io-val">GPS Coordinates</span></div>
+                            <div class="io-row"><span class="io-label">Out:</span><span class="io-val">(B, 20, 2)</span></div>
+                        </div>
+                        <div class="desc-text"><strong>Structure:</strong> Vector Math.<br><strong>Logic:</strong> Normalize Goal Distance (d/50m) and Relative Heading (h/180°).</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Col 2: Encoder (JEPA Part 1) -->
+            <div class="column">
+                <div class="card b-purple jepa-core" id="t-enc">
+                    <div class="card-top"><span class="card-title">Vision Encoder</span><span class="card-badge">DINOv2</span></div>
+                    <div class="card-body">
+                        <div class="viz-box">
+                            <div class="viz-grid">
+                                <div></div><div></div><div></div><div></div>
+                                <div></div><div></div><div></div><div></div>
+                                <div></div><div></div><div></div><div></div>
+                                <div></div><div></div><div></div><div></div>
+                            </div>
+                        </div>
+                        <div class="io-spec">
+                            <div class="io-row"><span class="io-label">In:</span><span class="io-val">(B*20, 3, 224, 224)</span></div>
+                            <div class="io-row"><span class="io-label">Out:</span><span class="io-val">(B, 20, 384)</span></div>
+                        </div>
+                        <div class="desc-text"><strong>Structure:</strong> ViT-S/14 Backbone.<br><strong>Logic:</strong> Gradients on last block/norm only. Extracts targets +3 steps into the future.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Col 3: Transformer (JEPA Part 2) -->
+            <div class="column">
+                <div class="card b-blue jepa-core" id="t-trans">
+                    <div class="card-top"><span class="card-title">Temporal Transformer</span><span class="card-badge">Causal</span></div>
+                    <div class="card-body">
+                        <div class="viz-box">
+                            <div class="viz-transformer">
+                                <div style="opacity:0.4"></div>
+                                <div style="opacity:0.6"></div>
+                                <div style="opacity:0.8"></div>
+                                <div style="opacity:1.0"></div>
+                            </div>
+                        </div>
+                        <div class="io-spec">
+                            <div class="io-row"><span class="io-label">In:</span><span class="io-val">(B, 20, 384)</span></div>
+                            <div class="io-row"><span class="io-label">Out:</span><span class="io-val">(B, 20, 512)</span></div>
+                        </div>
+                        <div class="desc-text"><strong>Structure:</strong> 4-Layer Transformer Encoder.<br><strong>Logic:</strong> Causal Self-Attention. Mask tokens replace frames for objective.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Col 4: Heads (JEPA Part 3) -->
+            <div class="column heads-col">
+                <div class="card b-orange jepa-core" id="t-jepa">
+                    <div class="card-top"><span class="card-title">Predictor Head</span><span class="card-badge">SSL</span></div>
+                    <div class="card-body">
+                        <div class="io-spec">
+                            <div class="io-row"><span class="io-label">In:</span><span class="io-val">(B, 20, 512)</span></div>
+                            <div class="io-row"><span class="io-label">Out:</span><span class="io-val">(B, 20, 64)</span></div>
+                        </div>
+                        <div class="desc-text"><strong>Structure:</strong> Target + Pred MLPs.<br><strong>Logic:</strong> Generates $z_{t+3}$ from $h_t$. Robust VICReg Loss forces alignment.</div>
+                    </div>
+                </div>
+                <div class="card b-red" id="t-crit">
+                    <div class="card-top"><span class="card-title">Safety Critic</span><span class="card-badge">Binary</span></div>
+                    <div class="card-body">
+                        <div class="viz-box"><div class="viz-critic"></div></div>
+                        <div class="io-spec">
+                            <div class="io-row"><span class="io-label">In:</span><span class="io-val">(B, 20, 512)</span></div>
+                            <div class="io-row"><span class="io-label">Out:</span><span class="io-val">(B, 20, 1)</span></div>
+                        </div>
+                        <div class="desc-text"><strong>Structure:</strong> 2-Layer MLP (Hidden: 128).<br><strong>Logic:</strong> Predicts probability rover will get stuck/in danger.</div>
+                    </div>
+                </div>
+                <div class="card b-green" id="t-moe">
+                    <div class="card-top"><span class="card-title">MoE Chunk Actor</span><span class="card-badge">Policy</span></div>
+                    <div class="card-body">
+                        <div class="viz-box">
+                            <div class="viz-moe">
+                                <div class="moe-gate"></div><div style="color:#64748b; font-size:10px;">→</div>
+                                <div class="moe-experts"><div class="moe-exp active"></div><div class="moe-exp"></div><div class="moe-exp"></div></div>
+                            </div>
+                        </div>
+                        <div class="io-spec">
+                            <div class="io-row"><span class="io-label">In:</span><span class="io-val">Latent + Ctx + Dang (515d)</span></div>
+                            <div class="io-row"><span class="io-label">Out:</span><span class="io-val">(B, 20, 10, 2)</span></div>
+                        </div>
+                        <div class="desc-text"><strong>Structure:</strong> 3x Experts + Linear Router.<br><strong>Logic:</strong> Late Fusion. Predicts 10-step action chunks. Explores w/ Gumbel noise.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Col 5: Targets -->
+            <div class="column targets-col">
+                <div class="card" style="border-left: 4px solid var(--accent-red); width: 180px;" id="t-gt1">
+                    <div class="card-top"><span class="card-title">Danger Score</span></div>
+                    <div class="card-body" style="padding:10px;">
+                        <div class="desc-text">Ground Truth Stuck State</div>
+                    </div>
+                </div>
+                <div class="card" style="border-left: 4px solid var(--accent-red); width: 180px;" id="t-gt2">
+                    <div class="card-top"><span class="card-title">Action Horizon</span></div>
+                    <div class="card-body" style="padding:10px;">
+                        <div class="desc-text">Human Throttle/Steer (L1 + Jerk Penalty)</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+
+        <!-- ================= INFERENCE ================= -->
+        <div class="section-header">
+            <span class="section-badge badge-infer">Inference Phase</span>
+            <p>Real-time Open Loop Deterministic Planning</p>
+        </div>
+
+        <div class="pipeline-wrapper" id="infer-pipe">
+            <svg class="svg-layer" id="svg-infer"></svg>
+            <div id="labels-infer"></div>
+
+            <!-- Col 1: Inputs -->
+            <div class="column input-col">
+                <div class="card b-gray" id="i-img">
+                    <div class="card-top"><span class="card-title">Live Camera</span><span class="card-badge">Sensor</span></div>
+                    <div class="card-body">
+                        <div class="viz-box"><div class="viz-stack" style="background: #3b82f6;"></div></div>
+                        <div class="io-spec">
+                            <div class="io-row"><span class="io-label">In:</span><span class="io-val">Camera Buffer</span></div>
+                            <div class="io-row"><span class="io-label">Out:</span><span class="io-val">(1, 20, 3, 224, 224)</span></div>
+                        </div>
+                        <div class="desc-text"><strong>Structure:</strong> Ring Buffer.<br><strong>Logic:</strong> Rolling buffer of last 20 frames. Standardize & Resize.</div>
+                    </div>
+                </div>
+                <div class="card b-gray" id="i-ctx">
+                    <div class="card-top"><span class="card-title">Goal Vector</span><span class="card-badge">GPS</span></div>
+                    <div class="card-body">
+                        <div class="viz-box"><div class="viz-compass"></div></div>
+                        <div class="io-spec">
+                            <div class="io-row"><span class="io-label">In:</span><span class="io-val">Telemetry</span></div>
+                            <div class="io-row"><span class="io-label">Out:</span><span class="io-val">(1, 2)</span></div>
+                        </div>
+                        <div class="desc-text"><strong>Structure:</strong> Vector Math.<br><strong>Logic:</strong> Calculate relative bearing and distance to current waypoint.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Col 2: Frozen Encoder -->
+            <div class="column">
+                <div class="card b-purple" id="i-enc">
+                    <div class="card-top"><span class="card-title">Vision Backbone</span><span class="card-badge">Frozen</span></div>
+                    <div class="card-body">
+                        <div class="viz-box">
+                            <div class="viz-grid">
+                                <div></div><div></div><div></div><div></div>
+                                <div></div><div></div><div></div><div></div>
+                            </div>
+                        </div>
+                        <div class="io-spec">
+                            <div class="io-row"><span class="io-label">In:</span><span class="io-val">(1, 20, 3, 224, 224)</span></div>
+                            <div class="io-row"><span class="io-label">Out:</span><span class="io-val">(1, 20, 384)</span></div>
+                        </div>
+                        <div class="desc-text"><strong>Structure:</strong> ViT-S/14 (Shared).<br><strong>Logic:</strong> Extracts spatial features. Gradients disabled (eval mode).</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Col 3: State -->
+            <div class="column">
+                <div class="card b-blue" id="i-trans">
+                    <div class="card-top"><span class="card-title">State Estimator</span><span class="card-badge">Latent</span></div>
+                    <div class="card-body">
+                        <div class="viz-box">
+                            <div class="viz-transformer">
+                                <div style="background:var(--accent-green); opacity:0.8"></div>
+                                <div style="background:var(--accent-green); opacity:0.8"></div>
+                            </div>
+                        </div>
+                        <div class="io-spec">
+                            <div class="io-row"><span class="io-label">In:</span><span class="io-val">(1, 20, 384)</span></div>
+                            <div class="io-row"><span class="io-label">Out:</span><span class="io-val">(1, 20, 512)</span></div>
+                        </div>
+                        <div class="desc-text"><strong>Structure:</strong> 4-Layer Transformer Encoder.<br><strong>Logic:</strong> Updates belief state using shared weights from training.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Col 4: Heads -->
+            <div class="column heads-col">
+                <div class="card b-red" id="i-crit">
+                    <div class="card-top"><span class="card-title">Danger Monitor</span><span class="card-badge">Critic</span></div>
+                    <div class="card-body">
+                        <div class="viz-box"><div class="viz-critic" style="border-color:var(--accent-red)"></div></div>
+                        <div class="io-spec">
+                            <div class="io-row"><span class="io-label">In:</span><span class="io-val">Latent (512d)</span></div>
+                            <div class="io-row"><span class="io-label">Out:</span><span class="io-val">Scalar [0.0 - 1.0]</span></div>
+                        </div>
+                        <div class="desc-text"><strong>Structure:</strong> 2-Layer MLP (Shared).<br><strong>Logic:</strong> Predicts immediate collision risk. Powers HUD display.</div>
+                    </div>
+                </div>
+                <div class="card b-green" id="i-moe">
+                    <div class="card-top"><span class="card-title">Deterministic Planner</span><span class="card-badge">MoE</span></div>
+                    <div class="card-body">
+                        <div class="viz-box">
+                            <div class="viz-moe">
+                                <div class="moe-gate"></div><div style="color:#64748b; font-size:10px;">→</div>
+                                <div class="moe-experts"><div class="moe-exp active"></div><div class="moe-exp"></div><div class="moe-exp"></div></div>
+                            </div>
+                        </div>
+                        <div class="io-spec">
+                            <div class="io-row"><span class="io-label">In:</span><span class="io-val">Latent+Ctx+Danger</span></div>
+                            <div class="io-row"><span class="io-label">Out:</span><span class="io-val">Action Chunk (10, 2)</span></div>
+                        </div>
+                        <div class="desc-text">
+                            <strong>Structure:</strong> MoE (Shared) + Deterministic Router.<br>
+                            <strong>Logic:</strong> 1. Fuse features. 2. Route to Expert. 3. Extract & execute step 1 of 10.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // Drawing Logic
+        function draw(wrapperId, svgId, labelsId, links) {
+            const wrapper = document.getElementById(wrapperId);
+            const svg = document.getElementById(svgId);
+            const labels = document.getElementById(labelsId);
+            
+            if (!wrapper || !svg) return;
+
+            // CLEAR
+            svg.innerHTML = '';
+            labels.innerHTML = '';
+            
+            // 1. Set SVG Dimensions to SCROLL area
+            const scrollW = wrapper.scrollWidth;
+            const scrollH = wrapper.scrollHeight;
+            svg.setAttribute('width', scrollW);
+            svg.setAttribute('height', scrollH);
+            
+            // Get wrapper viewport rect for reference
+            const box = wrapper.getBoundingClientRect();
+            // We need scroll offset to adjust relative coords
+            const scrollLeft = wrapper.scrollLeft;
+            const scrollTop = wrapper.scrollTop;
+
+            links.forEach(([src, dst, txt, type]) => {
+                const sEl = document.getElementById(src);
+                const dEl = document.getElementById(dst);
+                if (!sEl || !dEl) return;
+
+                const sR = sEl.getBoundingClientRect();
+                const dR = dEl.getBoundingClientRect();
+
+                // 2. Calculate coordinates relative to the Full Scrollable Canvas
+                const x1 = (sR.right - box.left) + scrollLeft;
+                const y1 = (sR.top + sR.height/2 - box.top) + scrollTop;
+                
+                const x2 = (dR.left - box.left) + scrollLeft;
+                const y2 = (dR.top + dR.height/2 - box.top) + scrollTop;
+
+                // Curve logic
+                let cx1 = x1 + (x2 - x1) * 0.4;
+                let cx2 = x2 - (x2 - x1) * 0.4;
+
+                const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                const d = `M ${x1} ${y1} C ${cx1} ${y1} ${cx2} ${y2} ${x2} ${y2}`;
+                
+                path.setAttribute("d", d);
+                path.setAttribute("class", `path-line ${type}`);
+                path.dataset.from = src;
+                path.dataset.to = dst;
+                svg.appendChild(path);
+
+                if (txt) {
+                    const lbl = document.createElement("div");
+                    lbl.className = "path-label";
+                    lbl.innerText = txt;
+                    const mx = x1 + (x2 - x1) * 0.5;
+                    const my = y1 + (y2 - y1) * 0.5;
+                    lbl.style.left = mx + "px";
+                    lbl.style.top = my + "px";
+                    labels.appendChild(lbl);
+                }
+            });
+        }
+
+        function refresh() {
+            // Training Links
+            draw('train-pipe', 'svg-train', 'labels-train', [
+                ['t-img', 't-enc', 'Frames', 'flow'],
+                ['t-enc', 't-trans', 'Embeds', 'flow'],
+                ['t-enc', 't-jepa', 'Target (t+3)', 'target-link'], 
+                ['t-trans', 't-jepa', 'Context State', 'flow'],
+                ['t-trans', 't-crit', 'State', 'flow'],
+                ['t-trans', 't-moe', 'State', 'flow'],
+                ['t-crit', 't-moe', 'Danger (det)', 'flow'],
+                ['t-ctx', 't-moe', 'Fusion', ''],
+                ['t-crit', 't-gt1', 'BCE', 'loss'],
+                ['t-moe', 't-gt2', 'L1+Jerk', 'loss']
+            ]);
+
+            // Inference Links
+            draw('infer-pipe', 'svg-infer', 'labels-infer', [
+                ['i-img', 'i-enc', 'Stream', 'flow'],
+                ['i-enc', 'i-trans', 'Feats', 'flow'],
+                ['i-trans', 'i-crit', 'Latent', ''],
+                ['i-trans', 'i-moe', 'Latent', 'flow'],
+                ['i-crit', 'i-moe', 'Danger', 'flow'],
+                ['i-ctx', 'i-moe', 'Nav', '']
+            ]);
+        }
+
+        // Init
+        window.addEventListener('resize', refresh);
+        
+        const ro = new ResizeObserver(refresh);
+        ro.observe(document.body);
+        
+        // Hover
+        document.addEventListener('mouseover', e => {
+            const card = e.target.closest('.card');
+            if(!card) return;
+            const pid = card.closest('.pipeline-wrapper').id;
+            const paths = document.querySelectorAll(`#${pid} .path-line`);
+            paths.forEach(p => {
+                if(p.dataset.from === card.id || p.dataset.to === card.id) {
+                    p.classList.add('active');
+                } else {
+                    p.style.opacity = '0.1';
+                }
+            });
+        });
+        document.addEventListener('mouseout', e => {
+            document.querySelectorAll('.path-line').forEach(p => {
+                p.classList.remove('active');
+                p.style.opacity = '';
+            });
+        });
+
+        setTimeout(refresh, 100);
+        setTimeout(refresh, 500);
+
+    </script>
+</body>
+</html>

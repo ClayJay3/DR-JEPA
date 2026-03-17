@@ -1,0 +1,25 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+ultralytics = "*"
+opencv-python = "*"
+torch = "*"
+torchvision = "*"
+pandas = "*"
+numpy = "*"
+tqdm = "*"
+bitsandbytes = "*"
+peft = "*"
+matplotlib = "*"
+cdsapi = "*"
+xarray = "*"
+netcdf4 = "*"
+dask = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.12"
