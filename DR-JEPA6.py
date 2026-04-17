@@ -18,10 +18,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler, Subset
 import torchvision.transforms.v2 as v2 
 import torchvision.models as models
 import torchvision
+
+from live_inference_test import evaluate_model
 
 # ==========================================
 # SYSTEM OPTIMIZATIONS
@@ -82,7 +84,7 @@ CONFIG = {
 
 # Automatically select GPU if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+print(device)
 # ==========================================
 # GPU DATA AUGMENTATION
 # ==========================================
@@ -354,14 +356,21 @@ class JPGDataset(Dataset):
 # ==========================================
 class RoverJEPA_v2(nn.Module):
     """
-    Main Model Architecture combining DINOv2 (Vision), a Transformer Encoder (Temporal),
+    Main Model Architecture combining DINOv2 (Vision), an LSTM (Temporal),
     and a Mixture of Experts (Action/Policy routing).
+
+    This version preserves the original class structure as much as possible,
+    replacing only the Transformer temporal encoder with an LSTM.
     """
     def __init__(self):
         super().__init__()
         
         print("Loading DINOv2 (ViT-S/14)...")
-        self.backbone = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', source='github')
+        self.backbone = torch.hub.load(
+            'facebookresearch/dinov2',
+            'dinov2_vits14',
+            source='github'
+        )
         
         # Freeze the majority of the DINOv2 backbone to prevent catastrophic forgetting
         for param in self.backbone.parameters():
@@ -383,16 +392,15 @@ class RoverJEPA_v2(nn.Module):
         # JEPA Mask Token (replaces masked frames during training)
         self.mask_token = nn.Parameter(torch.randn(1, 1, self.hidden_dim) * 0.02)
         
-        # Transformer processes the sequence of frames
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.hidden_dim, 
-            nhead=CONFIG['n_heads'], 
-            dim_feedforward=self.hidden_dim*4, 
-            dropout=0.1, 
+        # Replace Transformer with LSTM
+        # batch_first=True keeps input/output shape as (B, S, hidden_dim)
+        self.lstm = nn.LSTM(
+            input_size=self.hidden_dim,
+            hidden_size=self.hidden_dim,
+            num_layers=CONFIG['n_layers'],
             batch_first=True,
-            norm_first=True
+            dropout=0.1 if CONFIG['n_layers'] > 1 else 0.0
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=CONFIG['n_layers'])
         
         # JEPA Projections (Maps latents and targets to the same space for VICReg loss)
         self.predictor = nn.Sequential(
@@ -415,7 +423,7 @@ class RoverJEPA_v2(nn.Module):
         # Fusion dimensionality: Latent state (hidden_dim) + Context (2) + Danger signal (1)
         fusion_dim = self.hidden_dim + 3
         
-        # Multiple action experts (e.g., one might learn to drive straight, another to turn sharply)
+        # Multiple action experts
         self.experts = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(fusion_dim, 256),
@@ -443,33 +451,32 @@ class RoverJEPA_v2(nn.Module):
 
     def forward_sequence(self, images):
         """
-        Processes a sequence of images through the backbone and temporal transformer.
+        Processes a sequence of images through the backbone and temporal LSTM.
         Applies random masking during training for the JEPA objective.
         """
         B, S, C, H, W = images.shape
-        flat_imgs = images.view(B*S, C, H, W)
+        flat_imgs = images.view(B * S, C, H, W)
         
         # Extract features using DINOv2
         feats = self.backbone(flat_imgs)
         feats = feats.view(B, S, -1)
             
-        x = self.input_proj(feats) 
+        x = self.input_proj(feats)
         x = x + self.pos_embed[:, :S, :]
         
         # Self-supervised objective: Mask random frames (except the current frame)
         if self.training:
             mask = torch.rand(B, S, 1, device=x.device) < 0.15
-            mask[:, 0, :] = False 
-            x = torch.where(mask, self.mask_token, x)
+            mask[:, 0, :] = False
+            x = torch.where(mask, self.mask_token.expand(B, S, -1), x)
         
-        # Prevent transformer from looking into the future
-        attn_mask = nn.Transformer.generate_square_subsequent_mask(S, device=x.device)
-        latent_seq = self.transformer(x, mask=attn_mask, is_causal=True)
+        # LSTM processes sequence causally by construction
+        latent_seq, _ = self.lstm(x)
         
         return latent_seq, feats
 
     def get_jepa_projections(self, latents_pred, feats_target):
-        """Projects transformer latents and target backbone features for self-supervised loss."""
+        """Projects LSTM latents and target backbone features for self-supervised loss."""
         pred_proj = self.predictor(latents_pred)
         target_proj = self.target_projector(feats_target)
         return pred_proj, target_proj
@@ -484,11 +491,15 @@ class RoverJEPA_v2(nn.Module):
         danger_prob = torch.sigmoid(safety_logits)
         
         policy_input = latents
+        
         # Detach danger input so action loss doesn't falsely train the safety critic
-        danger_input = danger_prob.detach() 
+        danger_input = danger_prob.detach()
         
         # 2. Fuse all information
-        fusion_input = torch.cat([self.fusion_dropout(policy_input), context_sequence, danger_input], dim=1)
+        fusion_input = torch.cat(
+            [self.fusion_dropout(policy_input), context_sequence, danger_input],
+            dim=1
+        )
         
         # 3. Route to Experts
         routing_logits = self.router(fusion_input)
@@ -502,13 +513,15 @@ class RoverJEPA_v2(nn.Module):
         # Calculate actions from all experts
         expert_outputs = []
         for expert in self.experts:
-            expert_outputs.append(expert(fusion_input).view(latents.shape[0], CONFIG['action_horizon'], 2))
+            expert_outputs.append(
+                expert(fusion_input).view(latents.shape[0], CONFIG['action_horizon'], 2)
+            )
             
-        expert_outputs = torch.stack(expert_outputs, dim=1) 
+        expert_outputs = torch.stack(expert_outputs, dim=1)
         
         # Combine expert predictions weighted by the router's decision
         rw_expanded = routing_weights.view(latents.shape[0], self.num_experts, 1, 1)
-        action_chunks = torch.sum(expert_outputs * rw_expanded, dim=1) 
+        action_chunks = torch.sum(expert_outputs * rw_expanded, dim=1)
         
         return action_chunks, safety_logits, routing_weights
 
@@ -583,7 +596,7 @@ def train_model(args):
         return
 
     # Weighted sampler to address class/driving-behavior imbalance
-    sampler = WeightedRandomSampler(train_dataset.weights, len(train_dataset))
+    sampler = WeightedRandomSampler(train_dataset.weights, len(train_dataset) // 10)
     batch_size = CONFIG['batch_size']
     
     train_loader = DataLoader(
@@ -597,10 +610,34 @@ def train_model(args):
         persistent_workers=True      
     )
     
+
+    CONFIG['val_check_ratio'] = 0.10 
+
     val_loader = None
     if len(val_dataset) > 0:
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, 
-                                num_workers=4, pin_memory=True, drop_last=True)
+        num_train = len(train_dataset)
+        dynamic_val_size = int(num_train * CONFIG['val_check_ratio'])
+        target_size = max(100, min(dynamic_val_size, 2000))
+        
+        if len(val_dataset) > target_size:
+            indices = np.random.RandomState(42).choice(
+                len(val_dataset), target_size, replace=False
+            )
+            val_dataset = Subset(val_dataset, indices)
+        
+        # We use a larger batch size for validation because there's no autograd overhead
+        val_batch_size = CONFIG['batch_size'] * 2 
+        
+        val_loader = DataLoader(
+            val_dataset, 
+            batch_size=val_batch_size, 
+            shuffle=False, 
+            num_workers=8,               # Match training workers for fast JPEG decoding
+            pin_memory=True, 
+            drop_last=True,
+            prefetch_factor=2,           # Keep the CPU ahead of the GPU
+            persistent_workers=True      
+        )
 
     model = RoverJEPA_v2().to(device)
     print(f"Model Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
@@ -724,7 +761,7 @@ def train_model(args):
             val_metrics = {'tot': 0.0, 'phys': 0.0, 'cov': 0.0, 'act': 0.0, 'safe': 0.0}
             val_loop = tqdm(val_loader, desc="Validation", leave=False)
             
-            with torch.no_grad():
+            with torch.inference_mode(), torch.autocast(device_type='cuda', dtype=torch.bfloat16):
                 for i, (imgs, act_chunks, ctx, stuck) in enumerate(val_loop):
                     imgs = imgs.to(device)
                     ctx = ctx.to(device)
@@ -792,6 +829,7 @@ def train_model(args):
                 best_val_loss = functional_val_loss
                 patience_counter = 0 
                 torch.save(model.state_dict(), os.path.join(args.save_dir, "best_jepa_v2.pth"))
+                evaluate_model(RoverJEPA_v2().to(device), "runs/best_jepa_v2.pth", "/")
                 print(f"     [Saved Best Model (Action + Safe)]")
             else:
                 patience_counter += 1
