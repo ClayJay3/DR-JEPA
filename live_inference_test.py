@@ -72,6 +72,9 @@ class WorldObject:
         self.x, self.z = x, z
         self.c = color
         self.type = type_id 
+        self.width = width
+        self.height = height
+        self.depth = depth
         w, h, d = width/2, height, depth/2
         self.local_verts = np.array([
             [-w, 0, -d], [w, 0, -d], [w, 0, d], [-w, 0, d],  
@@ -201,6 +204,19 @@ class InfiniteRoverSim:
         elif dist_from_last_gen > 300.0:
             print(">>> ROVER LEFT CHUNK! Regenerating environment... <<<")
             self._generate_landscape()
+    
+    # Collision assumes rover is a square, obstacles are rectangles
+    def is_colliding(self, length=1):
+        for obj in self.objects:
+            if obj.type == 'goal':
+                continue
+                
+            relative_x = abs(obj.x - self.x)
+            relative_y = abs(obj.z - self.z)
+            if relative_x <= (obj.width / 2) + length / 2 and relative_y <= (obj.depth / 2) + length / 2:
+                return True
+            
+        return False
 
     def step(self, angular_velocity, linear_velocity):
         dt = 0.1
@@ -208,6 +224,7 @@ class InfiniteRoverSim:
         rad = math.radians(self.yaw)
         self.x += math.sin(rad) * linear_velocity * dt
         self.z += math.cos(rad) * linear_velocity * dt
+        print(self.is_colliding())
 
     def render(self):
         canvas = np.zeros((CONFIG['img_h'], CONFIG['img_w'], 3), dtype=np.uint8)
@@ -290,7 +307,7 @@ class InfiniteRoverSim:
 # ==========================================
 # MODEL ARCHITECTURE (Fully Synced with Training)
 # ==========================================
-class RoverJEPA_v2(nn.Module):
+class RoverJEPA_v2_Transformer(nn.Module):
     def __init__(self):
         super().__init__()
         
@@ -415,12 +432,183 @@ class RoverJEPA_v2(nn.Module):
         
         return action_chunks, safety_logits, routing_weights
 
+class RoverJEPA_v2_LSTM(nn.Module):
+    """
+    Main Model Architecture combining DINOv2 (Vision), an LSTM (Temporal),
+    and a Mixture of Experts (Action/Policy routing).
+
+    This version preserves the original class structure as much as possible,
+    replacing only the Transformer temporal encoder with an LSTM.
+    """
+    def __init__(self):
+        super().__init__()
+        
+        print("Loading DINOv2 (ViT-S/14)...")
+        self.backbone = torch.hub.load(
+            'facebookresearch/dinov2',
+            'dinov2_vits14',
+            source='github'
+        )
+        
+        # Freeze the majority of the DINOv2 backbone to prevent catastrophic forgetting
+        for param in self.backbone.parameters():
+            param.requires_grad = False
+            
+        # Unfreeze only the last attention block and normalization layers for fine-tuning
+        for param in self.backbone.blocks[-1].parameters():
+            param.requires_grad = True
+        for param in self.backbone.norm.parameters():
+            param.requires_grad = True
+            
+        self.embed_dim = CONFIG['embed_dim']
+        self.hidden_dim = CONFIG['hidden_dim']
+        
+        # Temporal Modeling Components
+        self.input_proj = nn.Linear(self.embed_dim, self.hidden_dim)
+        self.pos_embed = nn.Parameter(torch.zeros(1, CONFIG['seq_len'], self.hidden_dim))
+        
+        # JEPA Mask Token (replaces masked frames during training)
+        self.mask_token = nn.Parameter(torch.randn(1, 1, self.hidden_dim) * 0.02)
+        
+        # Replace Transformer with LSTM
+        # batch_first=True keeps input/output shape as (B, S, hidden_dim)
+        self.lstm = nn.LSTM(
+            input_size=self.hidden_dim,
+            hidden_size=self.hidden_dim,
+            num_layers=CONFIG['n_layers'],
+            batch_first=True,
+            dropout=0.1 if CONFIG['n_layers'] > 1 else 0.0
+        )
+        
+        # JEPA Projections (Maps latents and targets to the same space for VICReg loss)
+        self.predictor = nn.Sequential(
+            nn.Linear(self.hidden_dim, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Linear(256, CONFIG['proj_dim'])
+        )
+        self.target_projector = nn.Sequential(
+            nn.Linear(self.embed_dim, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Linear(256, CONFIG['proj_dim'])
+        )
+
+        # Policy & Routing Components
+        self.fusion_dropout = nn.Dropout(p=CONFIG['fusion_dropout_p'])
+        self.num_experts = CONFIG['num_experts']
+        
+        # Fusion dimensionality: Latent state (hidden_dim) + Context (2) + Danger signal (1)
+        fusion_dim = self.hidden_dim + 3
+        
+        # Multiple action experts
+        self.experts = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(fusion_dim, 256),
+                nn.ReLU(),
+                nn.Linear(256, CONFIG['action_horizon'] * 2)
+            ) for _ in range(self.num_experts)
+        ])
+        
+        # The router decides which expert gets to act based on the current state
+        self.router = nn.Sequential(
+            nn.Linear(fusion_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, self.num_experts)
+        )
+        
+        # Critic network to predict if the rover is currently "stuck" or in "danger"
+        self.critic = nn.Sequential(
+            nn.Linear(self.hidden_dim, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1)
+        )
+
+    def encode(self, x):
+        return self.backbone(x)
+
+    def forward_sequence(self, images):
+        """
+        Processes a sequence of images through the backbone and temporal LSTM.
+        Applies random masking during training for the JEPA objective.
+        """
+        B, S, C, H, W = images.shape
+        flat_imgs = images.view(B * S, C, H, W)
+        
+        # Extract features using DINOv2
+        feats = self.backbone(flat_imgs)
+        feats = feats.view(B, S, -1)
+            
+        x = self.input_proj(feats)
+        x = x + self.pos_embed[:, :S, :]
+        
+        # Self-supervised objective: Mask random frames (except the current frame)
+        if self.training:
+            mask = torch.rand(B, S, 1, device=x.device) < 0.15
+            mask[:, 0, :] = False
+            x = torch.where(mask, self.mask_token.expand(B, S, -1), x)
+        
+        # LSTM processes sequence causally by construction
+        latent_seq, _ = self.lstm(x)
+        
+        return latent_seq, feats
+
+    def get_jepa_projections(self, latents_pred, feats_target):
+        """Projects LSTM latents and target backbone features for self-supervised loss."""
+        pred_proj = self.predictor(latents_pred)
+        target_proj = self.target_projector(feats_target)
+        return pred_proj, target_proj
+
+    def get_action_heads(self, latents, context_sequence):
+        """
+        Executes the Mixture of Experts (MoE) action head.
+        Fuses vision latents with telemetry context and safety predictions.
+        """
+        # 1. Predict Danger / Stuck state
+        safety_logits = self.critic(latents)
+        danger_prob = torch.sigmoid(safety_logits)
+        
+        policy_input = latents
+        
+        # Detach danger input so action loss doesn't falsely train the safety critic
+        danger_input = danger_prob.detach()
+        
+        # 2. Fuse all information
+        fusion_input = torch.cat(
+            [self.fusion_dropout(policy_input), context_sequence, danger_input],
+            dim=1
+        )
+        
+        # 3. Route to Experts
+        routing_logits = self.router(fusion_input)
+        
+        # Add Gumbel-like noise during training to encourage expert exploration
+        if self.training:
+            routing_logits = routing_logits + torch.randn_like(routing_logits) * 0.1
+            
+        routing_weights = F.softmax(routing_logits, dim=-1)
+        
+        # Calculate actions from all experts
+        expert_outputs = []
+        for expert in self.experts:
+            expert_outputs.append(
+                expert(fusion_input).view(latents.shape[0], CONFIG['action_horizon'], 2)
+            )
+            
+        expert_outputs = torch.stack(expert_outputs, dim=1)
+        
+        # Combine expert predictions weighted by the router's decision
+        rw_expanded = routing_weights.view(latents.shape[0], self.num_experts, 1, 1)
+        action_chunks = torch.sum(expert_outputs * rw_expanded, dim=1)
+        
+        return action_chunks, safety_logits, routing_weights
+
 # ==========================================
 # MAIN LIVE DEPLOYMENT LOOP
 # ==========================================
 def deploy_live(checkpoint_path, output_video_path):
     print(f"Loading Model from {checkpoint_path}...")
-    model = RoverJEPA_v2().to(device)
+    model = RoverJEPA_v2_LSTM().to(device)
     
     checkpoint = torch.load(checkpoint_path, map_location=device)
     
