@@ -224,7 +224,6 @@ class InfiniteRoverSim:
         rad = math.radians(self.yaw)
         self.x += math.sin(rad) * linear_velocity * dt
         self.z += math.cos(rad) * linear_velocity * dt
-        print(f'X: {self.x}, Z: {self.z}')
 
     def render(self):
         canvas = np.zeros((CONFIG['img_h'], CONFIG['img_w'], 3), dtype=np.uint8)
@@ -328,7 +327,7 @@ class RunBasedRoverSim:
         self.yaw = 0.0 
         self.last_gen_x = 0.0
         self.last_gen_z = 0.0
-        self.run_total_steps = 0
+        self.run_steps = 0
         self.objects = []
         
         self.run_number += 1
@@ -431,7 +430,7 @@ class RunBasedRoverSim:
     # Returns True when run should be terminated
     def check_termination_conditions(self):
         dist_to_goal = math.hypot(self.goal.x - self.x, self.goal.z - self.z)
-        if self.run_steps > 1000:
+        if self.run_steps > 500:
             print(">>> TOTAL TIME EXCEEDED. Starting new run...<<<")
             return True
         elif dist_to_goal < 15.0:
@@ -460,7 +459,6 @@ class RunBasedRoverSim:
         self.z += math.cos(rad) * linear_velocity * dt
         self.run_steps += 1
         self.metrics["total_steps"] += 1
-        print(f'X: {self.x}, Z: {self.z}')
 
     def render(self):
         canvas = np.zeros((CONFIG['img_h'], CONFIG['img_w'], 3), dtype=np.uint8)
@@ -867,10 +865,11 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
         sim.reset_run()
         while True:
             # Handles spawning new biomes/chunks continuously based on player position
+            
             run_terminated = sim.check_termination_conditions()
             if run_terminated:
                 break
-            
+            sim.manage_world_chunks()
             dx = sim.goal.x - sim.x
             dz = sim.goal.z - sim.z
             dist = math.sqrt(dx**2 + dz**2)
