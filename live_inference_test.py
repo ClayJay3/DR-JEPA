@@ -330,7 +330,8 @@ class RunBasedRoverSim:
             "mean_jitter": 0,
             "total_alignment": 0,
             "mean_alignment": 0,
-            "path_efficiency": 0
+            "total_path_efficiency": 0,
+            "mean_path_efficiency": 0
         }
     
     def reset_run(self):
@@ -452,11 +453,13 @@ class RunBasedRoverSim:
         elif dist_to_goal < 15.0:
             self.metrics["reached_goal"] += 1
             # measure how efficient the path was (full efficiency may not be good if obstacles block path)
-            shortest_path_distance = math.sqrt(self.goal.x ** 2 + self.goal.y ** 2)
+            shortest_path_distance = math.sqrt(self.goal.x ** 2 + self.goal.z ** 2)
 
-            path_efficiency = shortest_path_distance / self.metrics["total_distance"]
-            self.metrics["path_efficiency"] = path_efficiency
+            path_efficiency = shortest_path_distance / self.metrics["distance_traveled"]
+            self.metrics["total_path_efficiency"] += path_efficiency
 
+            # Mean of completed runs, not total
+            self.metrics["mean_path_efficiency"] += self.metrics["total_path_erfficiency"] / self.metrics["reached_goal"] if self.metrics["reached_goal"] > 0 else 0
             print(">>> GOAL REACHED!  Starting new run... <<<")
             return True
         return False
@@ -489,8 +492,8 @@ class RunBasedRoverSim:
         self.metrics["distance_traveled"] += distance_traveled
 
         # measure alignment
-        vec_to_goal_x = goal_x - self.x
-        vec_to_goal_z = goal_z - self.z
+        vec_to_goal_x = self.goal.x - self.x
+        vec_to_goal_z = self.goal.z - self.z
         dist_to_goal = math.sqrt(vec_to_goal_x**2 + vec_to_goal_z**2)
         if dist_to_goal > 0 and distance_traveled > 0:
             alignment = (dx * vec_to_goal_x + dz * vec_to_goal_z) / (distance_traveled * dist_to_goal)
@@ -801,6 +804,16 @@ class RoverJEPA_v2_LSTM(nn.Module):
 
     def encode(self, x):
         return self.backbone(x)
+    
+    def forward_from_features(self, feats):
+        """Processes pre-extracted features through the temporal and policy layers."""
+        # feats shape: (B, S, embed_dim)
+        x = self.input_proj(feats)
+        x = x + self.pos_embed[:, :feats.size(1), :]
+        
+        # LSTM or Transformer processing
+        latent_seq, _ = self.lstm(x) 
+        return latent_seq
 
     def forward_sequence(self, images):
         """
@@ -900,7 +913,7 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
     img_t = torch.from_numpy(initial_rgb).permute(2, 0, 1).float().div(255.0).unsqueeze(0).to(device)
     img_t = gpu_val_transform(img_t)
     
-    seq_buffer_imgs = [img_t for _ in range(CONFIG['seq_len'])]
+    seq_buffer_feats = torch.zeros((1, CONFIG['seq_len'], CONFIG['embed_dim']), device=device)
     actual_steer = 0.0 
     for i in range(runs):
         prev_pred_str = 0
@@ -932,18 +945,16 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
 
             # We still need the frame for the model to process
             frame = sim.render()
-            
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img_t = torch.from_numpy(frame_rgb).permute(2, 0, 1).float().div(255.0).unsqueeze(0).to(device)
             img_t = gpu_val_transform(img_t)
             
-            seq_buffer_imgs.append(img_t)
-            seq_buffer_imgs.pop(0)
-
-            input_imgs = torch.stack(seq_buffer_imgs, dim=1)
-            
             with torch.no_grad(), torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-                latents, _ = model.forward_sequence(input_imgs)
+                new_feat = model.encode(img_t).unsqueeze(1) # Shape: (1, 1, embed_dim)
+
+                seq_buffer_feats = torch.cat([seq_buffer_feats[:, 1:, :], new_feat], dim=1)
+
+                latents = model.forward_from_features(seq_buffer_feats)
                 last_latent = latents[:, -1, :]
                 
                 best_chunk, safe_logits, routing_weights = model.get_action_heads(last_latent, ctx_now)
@@ -951,15 +962,15 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
                 danger_tensor = torch.sigmoid(safe_logits)
                 danger_prob = danger_tensor.item() 
                 sim.metrics["total_danger"] += danger_prob
-                sim.metrics["mean_danger"] = sim.metrics["total_danger"] / sim.metrics["total_steps"]
+                sim.metrics["mean_danger"] = sim.metrics["total_danger"] / sim.metrics["total_steps"] if sim.metrics["total_steps"] > 0 else 0
                 
                 pred_thr = float(best_chunk[0, 0, 0])
                 pred_str = float(best_chunk[0, 0, 1])
                 
                 sim.metrics["total_jitter"] += abs(pred_str - prev_pred_str)
-                sim.metrics["mean_jitter"] = sim.metrics["total_jitter"] / sim.metrics["total_steps"]
+                sim.metrics["mean_jitter"] = sim.metrics["total_jitter"] / sim.metrics["total_steps"] if sim.metrics["total_steps"] > 0 else 0
                 sim.metrics["total_throttle"] += pred_thr
-                sim.metrics["mean_throttle"] = sim.metrics["total_throttle"] / sim.metrics["total_steps"]
+                sim.metrics["mean_throttle"] = sim.metrics["total_throttle"] / sim.metrics["total_steps"] if sim.metrics["total_steps"] > 0 else 0
                 # Extract out the inverse steering to match training coordinates
                 if CONFIG.get('invert_heading', False):
                     pred_str *= -1.0
