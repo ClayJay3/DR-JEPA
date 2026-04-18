@@ -313,10 +313,24 @@ class RunBasedRoverSim:
         self.yaw = 0.0 
         self.run_number = 0
         self.run_steps = 0
+        self.goal_distance = 175
         self.objects = []
         self.metrics = {
+            "total_runs": 0,
+            "reached_goal": 0,
+            "total_goal_distance": 0,
+            "distance_traveled": 0,
             "total_steps": 0,
-            "steps_spent_colliding": 0
+            "steps_spent_colliding": 0,
+            "total_throttle": 0,
+            "mean_throttle": 0,
+            "total_danger": 0,
+            "mean_danger": 0,
+            "total_jitter": 0,
+            "mean_jitter": 0,
+            "total_alignment": 0,
+            "mean_alignment": 0,
+            "path_efficiency": 0
         }
     
     def reset_run(self):
@@ -331,7 +345,9 @@ class RunBasedRoverSim:
         self.objects = []
         
         self.run_number += 1
-        self._spawn_goal(175)
+        self.metrics["total_runs"] += 1
+        self._spawn_goal(self.goal_distance)
+        self.metrics["total_goal_distance"] += self.goal_distance
         self._generate_landscape()
 
 
@@ -434,6 +450,13 @@ class RunBasedRoverSim:
             print(">>> TOTAL TIME EXCEEDED. Starting new run...<<<")
             return True
         elif dist_to_goal < 15.0:
+            self.metrics["reached_goal"] += 1
+            # measure how efficient the path was (full efficiency may not be good if obstacles block path)
+            shortest_path_distance = math.sqrt(self.goal.x ** 2 + self.goal.y ** 2)
+
+            path_efficiency = shortest_path_distance / self.metrics["total_distance"]
+            self.metrics["path_efficiency"] = path_efficiency
+
             print(">>> GOAL REACHED!  Starting new run... <<<")
             return True
         return False
@@ -455,10 +478,28 @@ class RunBasedRoverSim:
         dt = 0.1
         self.yaw += angular_velocity * dt
         rad = math.radians(self.yaw)
-        self.x += math.sin(rad) * linear_velocity * dt
-        self.z += math.cos(rad) * linear_velocity * dt
+        dx = math.sin(rad) * linear_velocity * dt
+        dz = math.cos(rad) * linear_velocity * dt
+        self.x += dx
+        self.z += dz
+
+        distance_traveled = math.sqrt(dx**2 + dz**2)
         self.run_steps += 1
         self.metrics["total_steps"] += 1
+        self.metrics["distance_traveled"] += distance_traveled
+
+        # measure alignment
+        vec_to_goal_x = goal_x - self.x
+        vec_to_goal_z = goal_z - self.z
+        dist_to_goal = math.sqrt(vec_to_goal_x**2 + vec_to_goal_z**2)
+        if dist_to_goal > 0 and distance_traveled > 0:
+            alignment = (dx * vec_to_goal_x + dz * vec_to_goal_z) / (distance_traveled * dist_to_goal)
+
+            self.metrics["total_alignment"] += alignment
+            self.metrics["mean_alignment"] = self.metrics["total_alignment"] / self.metrics["total_steps"]
+        
+        
+
 
     def render(self):
         canvas = np.zeros((CONFIG['img_h'], CONFIG['img_w'], 3), dtype=np.uint8)
@@ -847,12 +888,12 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
     model.load_state_dict(clean_state_dict, strict=True)
     model.eval()
 
-    print("Starting Infinite Live Environment...")
+    print("Evaluating model metrics:")
     sim = RunBasedRoverSim()
     
-    fourcc = cv2.VideoWriter_fourcc(*'VP80')
-    out_writer = cv2.VideoWriter(output_video_path, fourcc, 30.0, (500, 500))
-    print(f"Recording video to {output_video_path}...")
+    # fourcc = cv2.VideoWriter_fourcc(*'VP80')
+    # out_writer = cv2.VideoWriter(output_video_path, fourcc, 30.0, (500, 500))
+    # print(f"Recording video to {output_video_path}...")
     
     initial_frame = sim.render()
     initial_rgb = cv2.cvtColor(initial_frame, cv2.COLOR_BGR2RGB)
@@ -862,6 +903,7 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
     seq_buffer_imgs = [img_t for _ in range(CONFIG['seq_len'])]
     actual_steer = 0.0 
     for i in range(runs):
+        prev_pred_str = 0
         sim.reset_run()
         while True:
             # Handles spawning new biomes/chunks continuously based on player position
@@ -888,6 +930,7 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
 
             ref_thr, ref_str = sim.get_reference_autopilot()
 
+            # We still need the frame for the model to process
             frame = sim.render()
             
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -907,19 +950,26 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
                 
                 danger_tensor = torch.sigmoid(safe_logits)
                 danger_prob = danger_tensor.item() 
+                sim.metrics["total_danger"] += danger_prob
+                sim.metrics["mean_danger"] = sim.metrics["total_danger"] / sim.metrics["total_steps"]
                 
                 pred_thr = float(best_chunk[0, 0, 0])
                 pred_str = float(best_chunk[0, 0, 1])
                 
+                sim.metrics["total_jitter"] += abs(pred_str - prev_pred_str)
+                sim.metrics["mean_jitter"] = sim.metrics["total_jitter"] / sim.metrics["total_steps"]
+                sim.metrics["total_throttle"] += pred_thr
+                sim.metrics["mean_throttle"] = sim.metrics["total_throttle"] / sim.metrics["total_steps"]
                 # Extract out the inverse steering to match training coordinates
                 if CONFIG.get('invert_heading', False):
                     pred_str *= -1.0
 
-                dominant_expert = np.argmax(routing_weights[0].cpu().numpy())
+                # dominant_expert = np.argmax(routing_weights[0].cpu().numpy())
 
             actual_steer += 0.2 * (pred_str - actual_steer)
 
             sim.step(angular_velocity=actual_steer * 30.0, linear_velocity=10.0 * pred_thr)
+            
 
             if sim.is_colliding():
                 sim.metrics["steps_spent_colliding"] += 1
@@ -927,50 +977,23 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
             # ==========================================
             # OVERLAY HUD
             # ==========================================
-            display_frame = frame.copy()
+            # display_frame = frame.copy()
+            # cv2.rectangle(display_frame, (20, 20), (220, 50), (50, 50, 50), -1) 
+            # bar_w = int(danger_prob * 200)
+            # color = (0, 255, 0) if danger_prob < 0.5 else (0, 0, 255)
+            # cv2.rectangle(display_frame, (20, 20), (20 + bar_w, 50), color, -1)
+            # ... (All text/HUD logic skipped for speed)
             
-            cv2.rectangle(display_frame, (20, 20), (220, 50), (50, 50, 50), -1) 
-            bar_w = int(danger_prob * 200)
-            color = (0, 255, 0) if danger_prob < 0.5 else (0, 0, 255)
-            cv2.rectangle(display_frame, (20, 20), (20 + bar_w, 50), color, -1)
-            cv2.putText(display_frame, f"DANGER: {danger_prob:.2f}", (30, 45), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            
-            cv2.putText(display_frame, "LIVE: ENDLESS RUNNER", (20, 80), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-            cv2.putText(display_frame, f"Dist to Goal: {dist:.1f}m", (20, 105), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.putText(display_frame, f"Model Thr: {pred_thr:.2f}", (20, 130), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-            cv2.putText(display_frame, f"Ref Thr: {ref_thr:.2f}", (20, 150), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-            cv2.putText(display_frame, f"Active Expert: {dominant_expert}", (20, 175), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 150, 0), 2)
-            
-            cx_hud, cy_hud = display_frame.shape[1] // 2, display_frame.shape[0] - 80
-            radius = 50
-            cv2.circle(display_frame, (cx_hud, cy_hud), radius, (100, 100, 100), 2) 
-            
-            h_angle = ref_str * 1.5 
-            hx_end = int(cx_hud + radius * math.sin(h_angle))
-            hy_end = int(cy_hud - radius * math.cos(h_angle))
-            cv2.line(display_frame, (cx_hud, cy_hud), (hx_end, hy_end), (255, 0, 0), 2)
-            
-            m_angle = pred_str * 1.5
-            mx_end = int(cx_hud + radius * math.sin(m_angle))
-            my_end = int(cy_hud - radius * math.cos(m_angle))
-            cv2.line(display_frame, (cx_hud, cy_hud), (mx_end, my_end), (0, 255, 0), 4)
-            
-            display_frame = cv2.resize(display_frame, (500, 500))
-            out_writer.write(display_frame)
-            
-            cv2.imshow("RoverJEPA - Infinite Live Deployment", display_frame)
-            if cv2.waitKey(1) == ord('q'): 
-                print("Exiting Live Deployment.")
-                break
+            # out_writer.write(display_frame)
+            # cv2.imshow("RoverJEPA - Infinite Live Deployment", display_frame)
+            # if cv2.waitKey(1) == ord('q'): 
+            #     break
                 
-        out_writer.release()
-        cv2.destroyAllWindows()
+        # out_writer.release()
+        # cv2.destroyAllWindows()
+    
+    
+    
     print(sim.metrics)
     return sim.metrics
 
