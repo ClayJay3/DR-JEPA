@@ -5,8 +5,8 @@ import math
 import warnings
 import sys
 import shutil
-import time
 import gc
+import csv
 
 import cv2
 import pandas as pd
@@ -18,10 +18,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler, Subset
 import torchvision.transforms.v2 as v2 
 import torchvision.models as models
 import torchvision
+
+from live_inference_test import evaluate_model
 
 # ==========================================
 # SYSTEM OPTIMIZATIONS
@@ -82,7 +84,6 @@ CONFIG = {
 
 # Automatically select GPU if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 # ==========================================
 # GPU DATA AUGMENTATION
 # ==========================================
@@ -218,6 +219,7 @@ def process_and_pack(data_dir, output_dir):
     # Write everything into a single binary blob
     with open(bin_path, 'wb') as f_bin:
         with Pool(cpu_count()) as pool:
+        # with Pool(processes=4) as pool:
             for result in tqdm(pool.imap(_process_video_jpg, worker_args), total=len(video_files)):
                 if result:
                     jpg_bytes_list, meta_list = result
@@ -440,6 +442,16 @@ class RoverJEPA_v2(nn.Module):
 
     def encode(self, x):
         return self.backbone(x)
+    
+    def forward_from_features(self, feats):
+        """Processes pre-extracted features through the temporal and policy layers."""
+        # feats shape: (B, S, embed_dim)
+        x = self.input_proj(feats)
+        x = x + self.pos_embed[:, :feats.size(1), :]
+        
+        # LSTM or Transformer processing
+        latent_seq = self.transformer(x) 
+        return latent_seq
 
     def forward_sequence(self, images):
         """
@@ -590,17 +602,42 @@ def train_model(args):
         train_dataset, 
         batch_size=batch_size, 
         sampler=sampler, 
-        num_workers=8,               
+        num_workers=8,            
         pin_memory=True, 
         drop_last=True,
         prefetch_factor=3,           
         persistent_workers=True      
     )
     
+
+    CONFIG['val_check_ratio'] = 0.10 
+
     val_loader = None
     if len(val_dataset) > 0:
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, 
-                                num_workers=4, pin_memory=True, drop_last=True)
+        # num_train = len(train_dataset)
+        # dynamic_val_size = int(num_train * CONFIG['val_check_ratio'])
+        # # target_size = max(100, min(dynamic_val_size, 2000))
+        # target_size = 100
+        # if len(val_dataset) > target_size:
+        #     indices = np.random.RandomState(42).choice(
+        #         len(val_dataset), target_size, replace=False
+        #     )
+        #     val_dataset = Subset(val_dataset, indices)
+        
+        # We use a larger batch size for validation because there's no autograd overhead
+        # val_batch_size = CONFIG['batch_size'] * 2 
+        val_batch_size = CONFIG['batch_size']
+        
+        val_loader = DataLoader(
+            val_dataset, 
+            batch_size=val_batch_size, 
+            shuffle=False, 
+            num_workers=8,               # Match training workers for fast JPEG decoding
+            pin_memory=True, 
+            drop_last=True,
+            prefetch_factor=2,           # Keep the CPU ahead of the GPU
+            persistent_workers=True      
+        )
 
     model = RoverJEPA_v2().to(device)
     print(f"Model Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
@@ -724,7 +761,7 @@ def train_model(args):
             val_metrics = {'tot': 0.0, 'phys': 0.0, 'cov': 0.0, 'act': 0.0, 'safe': 0.0}
             val_loop = tqdm(val_loader, desc="Validation", leave=False)
             
-            with torch.no_grad():
+            with torch.inference_mode(), torch.autocast(device_type='cuda', dtype=torch.bfloat16):
                 for i, (imgs, act_chunks, ctx, stuck) in enumerate(val_loop):
                     imgs = imgs.to(device)
                     ctx = ctx.to(device)
@@ -792,6 +829,22 @@ def train_model(args):
                 best_val_loss = functional_val_loss
                 patience_counter = 0 
                 torch.save(model.state_dict(), os.path.join(args.save_dir, "best_jepa_v2.pth"))
+                metrics = evaluate_model(RoverJEPA_v2().to(device), "runs/best_jepa_v2.pth", "/", runs=5)
+                training_metrics_path = os.path.join(args.save_dir, "training_metrics.csv")
+                row = {'epoch': epoch}
+                row.update(metrics)
+                
+                file_exists = os.path.isfile(training_metrics_path)
+                
+                # We open in 'a' (append) mode
+                with open(training_metrics_path, mode='a', newline='') as f:
+                    writer = csv.DictWriter(f, fieldnames=row.keys())
+                    
+                    # If the file is new, write the header first
+                    if not file_exists:
+                        writer.writeheader()
+                        
+                    writer.writerow(row)
                 print(f"     [Saved Best Model (Action + Safe)]")
             else:
                 patience_counter += 1
