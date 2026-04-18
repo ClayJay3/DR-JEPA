@@ -450,7 +450,7 @@ class RoverJEPA_v2(nn.Module):
         x = x + self.pos_embed[:, :feats.size(1), :]
         
         # LSTM or Transformer processing
-        latent_seq, _ = self.transformer(x) 
+        latent_seq = self.transformer(x) 
         return latent_seq
 
     def forward_sequence(self, images):

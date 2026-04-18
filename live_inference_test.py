@@ -459,7 +459,7 @@ class RunBasedRoverSim:
             self.metrics["total_path_efficiency"] += path_efficiency
 
             # Mean of completed runs, not total
-            self.metrics["mean_path_efficiency"] += self.metrics["total_path_erfficiency"] / self.metrics["reached_goal"] if self.metrics["reached_goal"] > 0 else 0
+            self.metrics["mean_path_efficiency"] += self.metrics["total_path_efficiency"] / self.metrics["reached_goal"] if self.metrics["reached_goal"] > 0 else 0
             print(">>> GOAL REACHED!  Starting new run... <<<")
             return True
         return False
