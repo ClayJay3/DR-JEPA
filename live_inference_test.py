@@ -315,6 +315,8 @@ class RunBasedRoverSim:
         self.run_steps = 0
         self.goal_distance = 175
         self.collision_state = False
+        self.current_biome = 'normal'
+        self.biome_cycle = ['normal', 'wall', 'dense']
         self.objects = []
         self.metrics = {
             "total_runs": 0,
@@ -350,6 +352,7 @@ class RunBasedRoverSim:
         self.collision_state = False
         self.run_number += 1
         self.metrics["total_runs"] += 1
+        self.current_biome = self.biome_cycle[self.run_number % len(self.biome_cycle)]
         self._spawn_goal(self.goal_distance)
         self.metrics["total_goal_distance"] += self.goal_distance
         self._generate_landscape()
@@ -378,14 +381,7 @@ class RunBasedRoverSim:
                 alive_objects.append(obj)
         self.objects = alive_objects
 
-        # Randomly select the biome (Landscape Type)
-        rand_val = np.random.rand()
-        if rand_val < 0.33:
-            spawn_type = 'wall'
-        elif rand_val < 0.66:
-            spawn_type = 'dense'
-        else:
-            spawn_type = 'normal'
+        spawn_type = self.current_biome
 
         print(f"\n>>> Generating New Chunk Biome: {spawn_type.upper()} <<<")
 
@@ -479,7 +475,7 @@ class RunBasedRoverSim:
                 # Went from not colliding to colliding, so its a unique collision
                 if not self.collision_state:
                     self.metrics["total_unique_collisions"] += 1
-                    self.metrics["mean_unique_collisions"] = self.metrics["total_unique_collisions"] / self.metrics["total_steps"] if self.metrics["total_steps"] > 0 else 0
+                    self.metrics["mean_unique_collisions"] = self.metrics["total_unique_collisions"] / self.metrics["total_runs"] if self.metrics["total_runs"] > 0 else 0
                 self.collision_state = True
                 return True
         self.collision_state = False
@@ -719,6 +715,7 @@ class RoverJEPA_v2_Transformer(nn.Module):
         return action_chunks, safety_logits, routing_weights
 
 
+
 def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
     print(f"Loading Model from {checkpoint_path}...")
 
@@ -843,7 +840,7 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
 # ==========================================
 def deploy_live(checkpoint_path, output_video_path):
     print(f"Loading Model from {checkpoint_path}...")
-    model = RoverJEPA_v2_Transformer.to(device)
+    model = RoverJEPA_v2_Transformer().to(device)
     
     checkpoint = torch.load(checkpoint_path, map_location=device)
     
