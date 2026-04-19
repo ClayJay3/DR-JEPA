@@ -1013,7 +1013,7 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
 # ==========================================
 def deploy_live(checkpoint_path, output_video_path):
     print(f"Loading Model from {checkpoint_path}...")
-    model = RoverJEPA_v2_LSTM().to(device)
+    model = RoverJEPA_v2_Transformer().to(device)
     
     checkpoint = torch.load(checkpoint_path, map_location=device)
     
@@ -1146,5 +1146,4 @@ if __name__ == "__main__":
     parser.add_argument('--output_video', default='live_run.webm', help="Output path for the video recording.")
     args = parser.parse_args()
     
-    # deploy_live(args.checkpoint, args.output_video)
-    evaluate_model(RoverJEPA_v2_LSTM().to(device), args.checkpoint, args.output_video)
+    deploy_live(args.checkpoint, args.output_video)
