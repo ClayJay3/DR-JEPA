@@ -524,6 +524,8 @@ class RoverJEPA_v2(nn.Module):
         
         return action_chunks, safety_logits, routing_weights
 
+
+
 # ==========================================
 # PART 4: LOSS FUNCTIONS
 # ==========================================
@@ -640,6 +642,7 @@ def train_model(args):
         )
 
     model = RoverJEPA_v2().to(device)
+
     print(f"Model Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
     
     # Separate parameter groups for differential learning rates
@@ -835,11 +838,10 @@ def train_model(args):
             
 
             metrics = evaluate_model(RoverJEPA_v2().to(device), "runs/best_jepa_v2.pth", "/", runs=5)
-            metrics["tot"] = val_metrics['tot']
-            metrics["phys"] = val_metrics['phys']
-            metrics["cov"] = val_metrics['cov']
-            metrics["act"] = val_metrics['act']
-            metrics["safe"] = val_metrics['safe']
+            metrics["tot"] = avg_val_tot
+            metrics["phys"] = avg_val_phys
+            metrics["act"] = avg_val_act
+            metrics["safe"] = avg_val_safe
 
             training_metrics_path = os.path.join(args.save_dir, "training_metrics.csv")
             row = {'epoch': epoch}
@@ -863,6 +865,7 @@ def train_model(args):
                 
         # Always save the latest model as well
         torch.save(model.state_dict(), os.path.join(args.save_dir, "latest_jepa_v2.pth"))
+
 
 # ==========================================
 # PART 6: VISUALIZATION (OPEN LOOP + HUD)
