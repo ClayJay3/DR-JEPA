@@ -592,7 +592,7 @@ class RunBasedRoverSim:
 # ==========================================
 # MODEL ARCHITECTURE (Fully Synced with Training)
 # ==========================================
-class RoverJEPA_v2_Transformer(nn.Module):
+class RoverJEPA_v2(nn.Module):
     def __init__(self):
         super().__init__()
         
@@ -719,7 +719,7 @@ class RoverJEPA_v2_Transformer(nn.Module):
 
 
 
-def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
+def evaluate_model(model, checkpoint_path, output_video_path, runs=9):
     print(f"Loading Model from {checkpoint_path}...")
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -782,10 +782,10 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
 
                 seq_buffer_feats = torch.cat([seq_buffer_feats[:, 1:, :], new_feat], dim=1)
 
-                latents = model.forward_from_features(seq_buffer_feats)
-                last_latent = latents[:, -1, :]
+                final_state, latent_seq = model.forward_from_features(seq_buffer_feats)
+                best_chunk, safe_logits, routing_weights = model.get_action_heads(final_state, ctx_now)
                 
-                best_chunk, safe_logits, routing_weights = model.get_action_heads(last_latent, ctx_now)
+
                 
                 danger_tensor = torch.sigmoid(safe_logits)
                 danger_prob = danger_tensor.item() 
