@@ -13,6 +13,7 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
+import csv
 
 import torch
 import torch.nn as nn
@@ -22,7 +23,7 @@ from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 import torchvision.transforms.v2 as v2 
 import torchvision.models as models
 import torchvision
-
+from live_inference_test import evaluate_model
 # ==========================================
 # SYSTEM OPTIMIZATIONS
 # ==========================================
@@ -422,6 +423,20 @@ class RoverLSTM(nn.Module):
     def encode(self, x):
         return self.backbone(x)
 
+    def forward_from_features(self, feats):
+        """Processes pre-extracted features through the temporal and policy layers."""
+        x = self.input_proj(feats)
+        x = x + self.pos_embed[:, :feats.size(1), :]
+        
+        latent_seq, (h_n, c_n) = self.lstm(x) 
+        
+        final_forward = h_n[-2] 
+        final_backward = h_n[-1]
+        
+        final_state = torch.cat([final_forward, final_backward], dim=-1)
+        
+        return final_state, latent_seq
+
     def forward_sequence(self, images):
         """
         Processes a sequence of images through the backbone and temporal LSTM.
@@ -540,7 +555,7 @@ def train_model(args):
     val_loader = None
     if len(val_dataset) > 0:
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, 
-                                num_workers=4, pin_memory=True, drop_last=True)
+                                num_workers=8, pin_memory=True, drop_last=True)
 
     model = RoverLSTM().to(device)
     print(f"Model Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
@@ -680,34 +695,31 @@ def train_model(args):
                                  (CONFIG['w_act'] * loss_act) + \
                                  (0.1 * cv_loss)
                     val_metrics['tot'] += loss_total.item()
-                    val_metrics['phys'] += loss_phys.item()
-                    val_metrics['cov'] += l_cov.item()
                     val_metrics['act'] += loss_act.item()
                     val_metrics['safe'] += loss_safe.item()
                     
                     val_loop.set_postfix({
                         'Tot': f"{val_metrics['tot'] / (i+1):.2f}",
-                        'Phy': f"{val_metrics['phys'] / (i+1):.2f}",
-                        'Cov': f"{val_metrics['cov'] / (i+1):.2f}",
                         'Act': f"{val_metrics['act'] / (i+1):.2f}",
                         'Safe': f"{val_metrics['safe'] / (i+1):.3f}"
                     })
             
             avg_val_tot = val_metrics['tot'] / len(val_loader)
-            avg_val_phys = val_metrics['phys'] / len(val_loader)
             avg_val_act = val_metrics['act'] / len(val_loader)
             avg_val_safe = val_metrics['safe'] / len(val_loader)
             
-            print(f"  -> Val Loss | Tot: {avg_val_tot:.2f} | Phy: {avg_val_phys:.2f} | Act: {avg_val_act:.2f} | Safe: {avg_val_safe:.3f}")
+            print(f"  -> Val Loss | Tot: {avg_val_tot:.2f} | Act: {avg_val_act:.2f} | Safe: {avg_val_safe:.3f}")
             
             # Calculate a functional score that ignores the self-supervised penalties for checkpointing
             functional_val_loss = avg_val_act + avg_val_safe
+
+            
 
             # Early Stopping and Checkpointing Check
             if functional_val_loss < best_val_loss:
                 best_val_loss = functional_val_loss
                 patience_counter = 0 
-                torch.save(model.state_dict(), os.path.join(args.save_dir, "best_jepa_v2.pth"))
+                torch.save(model.state_dict(), os.path.join(args.save_dir, "best_lstm_v2.pth"))
                 print(f"     [Saved Best Model (Action + Safe)]")
             else:
                 patience_counter += 1
@@ -716,6 +728,26 @@ def train_model(args):
             if patience_counter >= CONFIG['patience']:
                 print(f"Early stopping triggered after {epoch+1} epochs.")
                 break
+
+            metrics = evaluate_model(RoverLSTM().to(device), os.path.join(args.save_dir, "best_lstm_v2.pth"), "/", runs=9)
+            metrics["tot"] = avg_val_tot
+            metrics["act"] = avg_val_act
+            metrics["safe"] = avg_val_safe
+
+            training_metrics_path = os.path.join(args.save_dir, "training_metrics.csv")
+            row = {'epoch': epoch}
+            row.update(metrics)
+            
+            file_exists = os.path.isfile(training_metrics_path)
+            
+            with open(training_metrics_path, mode='a', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=row.keys())
+                
+                # If the file is new, write the header first
+                if not file_exists:
+                    writer.writeheader()
+                    
+                writer.writerow(row)
                 
         # Always save the latest model as well
         torch.save(model.state_dict(), os.path.join(args.save_dir, "latest_jepa_v2.pth"))

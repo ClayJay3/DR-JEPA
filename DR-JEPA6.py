@@ -445,13 +445,14 @@ class RoverJEPA_v2(nn.Module):
     
     def forward_from_features(self, feats):
         """Processes pre-extracted features through the temporal and policy layers."""
-        # feats shape: (B, S, embed_dim)
         x = self.input_proj(feats)
         x = x + self.pos_embed[:, :feats.size(1), :]
         
-        # LSTM or Transformer processing
         latent_seq = self.transformer(x) 
-        return latent_seq
+        
+        final_state = latent_seq[:, -1, :]
+        
+        return final_state, latent_seq
 
     def forward_sequence(self, images):
         """
@@ -597,7 +598,7 @@ def train_model(args):
         return
 
     # Weighted sampler to address class/driving-behavior imbalance
-    sampler = WeightedRandomSampler(train_dataset.weights, len(train_dataset))
+    sampler = WeightedRandomSampler(train_dataset.weights, len(train_dataset) // 200)
     batch_size = CONFIG['batch_size']
     
     train_loader = DataLoader(
@@ -826,18 +827,20 @@ def train_model(args):
             
             # Calculate a functional score that ignores the self-supervised penalties for checkpointing
             functional_val_loss = avg_val_act + avg_val_safe
-
+            
             # Early Stopping and Checkpointing Check
             if functional_val_loss < best_val_loss:
                 best_val_loss = functional_val_loss
                 patience_counter = 0 
+                torch.save(model.state_dict(), os.path.join(args.save_dir, "best_jepa_v2.pth"))
                 print(f"     [Saved Best Model (Action + Safe)]")
             else:
                 patience_counter += 1
                 print(f"     [No Improve] Patience: {patience_counter}/{CONFIG['patience']}")
             
+            
 
-            metrics = evaluate_model(RoverJEPA_v2().to(device), "runs/best_jepa_v2.pth", "/", runs=5)
+            metrics = evaluate_model(RoverJEPA_v2().to(device), "runs/best_jepa_v2.pth", "/", runs=9)
             metrics["tot"] = avg_val_tot
             metrics["phys"] = avg_val_phys
             metrics["act"] = avg_val_act
@@ -849,7 +852,6 @@ def train_model(args):
             
             file_exists = os.path.isfile(training_metrics_path)
             
-            # We open in 'a' (append) mode
             with open(training_metrics_path, mode='a', newline='') as f:
                 writer = csv.DictWriter(f, fieldnames=row.keys())
                 
