@@ -524,6 +524,8 @@ class RoverJEPA_v2(nn.Module):
         
         return action_chunks, safety_logits, routing_weights
 
+
+
 # ==========================================
 # PART 4: LOSS FUNCTIONS
 # ==========================================
@@ -640,6 +642,7 @@ def train_model(args):
         )
 
     model = RoverJEPA_v2().to(device)
+
     print(f"Model Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
     
     # Separate parameter groups for differential learning rates
@@ -828,34 +831,41 @@ def train_model(args):
             if functional_val_loss < best_val_loss:
                 best_val_loss = functional_val_loss
                 patience_counter = 0 
-                torch.save(model.state_dict(), os.path.join(args.save_dir, "best_jepa_v2.pth"))
-                metrics = evaluate_model(RoverJEPA_v2().to(device), "runs/best_jepa_v2.pth", "/", runs=5)
-                training_metrics_path = os.path.join(args.save_dir, "training_metrics.csv")
-                row = {'epoch': epoch}
-                row.update(metrics)
-                
-                file_exists = os.path.isfile(training_metrics_path)
-                
-                # We open in 'a' (append) mode
-                with open(training_metrics_path, mode='a', newline='') as f:
-                    writer = csv.DictWriter(f, fieldnames=row.keys())
-                    
-                    # If the file is new, write the header first
-                    if not file_exists:
-                        writer.writeheader()
-                        
-                    writer.writerow(row)
                 print(f"     [Saved Best Model (Action + Safe)]")
             else:
                 patience_counter += 1
                 print(f"     [No Improve] Patience: {patience_counter}/{CONFIG['patience']}")
+            
+
+            metrics = evaluate_model(RoverJEPA_v2().to(device), "runs/best_jepa_v2.pth", "/", runs=5)
+            metrics["tot"] = avg_val_tot
+            metrics["phys"] = avg_val_phys
+            metrics["act"] = avg_val_act
+            metrics["safe"] = avg_val_safe
+
+            training_metrics_path = os.path.join(args.save_dir, "training_metrics.csv")
+            row = {'epoch': epoch}
+            row.update(metrics)
+            
+            file_exists = os.path.isfile(training_metrics_path)
+            
+            # We open in 'a' (append) mode
+            with open(training_metrics_path, mode='a', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=row.keys())
                 
+                # If the file is new, write the header first
+                if not file_exists:
+                    writer.writeheader()
+                    
+                writer.writerow(row)
+
             if patience_counter >= CONFIG['patience']:
                 print(f"Early stopping triggered after {epoch+1} epochs.")
                 break
                 
         # Always save the latest model as well
         torch.save(model.state_dict(), os.path.join(args.save_dir, "latest_jepa_v2.pth"))
+
 
 # ==========================================
 # PART 6: VISUALIZATION (OPEN LOOP + HUD)
