@@ -598,7 +598,7 @@ def train_model(args):
         return
 
     # Weighted sampler to address class/driving-behavior imbalance
-    sampler = WeightedRandomSampler(train_dataset.weights, len(train_dataset) // 200)
+    sampler = WeightedRandomSampler(train_dataset.weights, len(train_dataset))
     batch_size = CONFIG['batch_size']
     
     train_loader = DataLoader(
