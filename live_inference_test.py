@@ -8,6 +8,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms.v2 as v2 
 import torchvision.models as models
+import importlib.util
+import sys
+import os
 
 # ==========================================
 # CONFIGURATION
@@ -418,11 +421,19 @@ class RoverJEPA_v2(nn.Module):
 # ==========================================
 # MAIN LIVE DEPLOYMENT LOOP
 # ==========================================
-def deploy_live(checkpoint_path, output_video_path):
+def deploy_live(checkpoint_path, output_video_path, model_type):
     print(f"Loading Model from {checkpoint_path}...")
-    model = RoverJEPA_v2().to(device)
+    if model_type.lower() == 'lstm':
+        # Dynamically load from a module with a hyphen in the filename
+        spec = importlib.util.spec_from_file_location("DR_LSTM", os.path.join(os.path.dirname(__file__), "DR-LSTM.py"))
+        dr_lstm_module = importlib.util.module_from_spec(spec)
+        sys.modules["DR_LSTM"] = dr_lstm_module
+        spec.loader.exec_module(dr_lstm_module)
+        model = dr_lstm_module.RoverLSTM().to(device)
+    else:
+        model = RoverJEPA_v2().to(device)
     
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     
     clean_state_dict = {k.replace('_orig_mod.', ''): v for k, v in checkpoint.items()}
         
@@ -548,9 +559,10 @@ def deploy_live(checkpoint_path, output_video_path):
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Live deployment of RoverJEPA in an infinite synthetic world.")
+    parser = argparse.ArgumentParser(description="Live deployment of RoverJEPA/LSTM in an infinite synthetic world.")
     parser.add_argument('--checkpoint', required=True, help="Path to the trained .pth model file.")
     parser.add_argument('--output_video', default='live_run.webm', help="Output path for the video recording.")
+    parser.add_argument('--model', default='jepa', choices=['jepa', 'lstm'], help="Which architecture to load from the checkpoint (jepa or lstm).")
     args = parser.parse_args()
     
-    deploy_live(args.checkpoint, args.output_video)
+    deploy_live(args.checkpoint, args.output_video, args.model)
