@@ -11,6 +11,7 @@ import torchvision.models as models
 import importlib.util
 import sys
 import os
+import random
 
 # ==========================================
 # CONFIGURATION
@@ -383,7 +384,6 @@ class RunBasedRoverSim:
             if math.hypot(obj.x - self.x, obj.z - self.z) < 30.0:
                 alive_objects.append(obj)
         self.objects = alive_objects
-
         spawn_type = self.current_biome
 
         print(f"\n>>> Generating New Chunk Biome: {spawn_type.upper()} <<<")
@@ -719,7 +719,12 @@ class RoverJEPA_v2(nn.Module):
 
 
 
-def evaluate_model(model, checkpoint_path, output_video_path, runs=9):
+def evaluate_model(model, checkpoint_path, output_video_path, runs=9, base_seed=100):
+    py_rng_state = random.getstate()
+    np_rng_state = np.random.get_state()
+    torch_rng_state = torch.get_rng_state()
+    if torch.cuda.is_available():
+        cuda_rng_state = torch.cuda.get_rng_state_all()
     print(f"Loading Model from {checkpoint_path}...")
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -744,6 +749,12 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=9):
     seq_buffer_feats = torch.zeros((1, CONFIG['seq_len'], CONFIG['embed_dim']), device=device)
     actual_steer = 0.0 
     for i in range(runs):
+        run_seed = base_seed + i
+        random.seed(run_seed)
+        np.random.seed(run_seed)
+        torch.manual_seed(run_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(run_seed)
         prev_pred_str = 0
         sim.reset_run()
         while True:
@@ -831,7 +842,11 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=9):
         # out_writer.release()
         # cv2.destroyAllWindows()
     
-    
+    random.setstate(py_rng_state)
+    np.random.set_state(np_rng_state)
+    torch.set_rng_state(torch_rng_state)
+    if torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(cuda_rng_state)
     
     print(sim.metrics)
     return sim.metrics
