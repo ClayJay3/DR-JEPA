@@ -5,26 +5,25 @@ import math
 import warnings
 import sys
 import shutil
+import time
 import gc
-import csv
 
 import cv2
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from multiprocessing import Pool, cpu_count
+import csv
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler, Subset
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 import torchvision.transforms.v2 as v2 
 import torchvision.models as models
 import torchvision
-
 from live_inference_test import evaluate_model
-
 # ==========================================
 # SYSTEM OPTIMIZATIONS
 # ==========================================
@@ -49,7 +48,6 @@ CONFIG = {
     'ema_decay': 0.996,     
     'seq_len': 20,           # Number of historical frames to look at
     'action_horizon': 10,    # Number of future actions to predict
-    'jepa_offset': 3,        # Temporal offset for JEPA target prediction
     'patience': 25,          # Early stopping patience
     
     # --- Architecture Dimensions ---
@@ -65,8 +63,6 @@ CONFIG = {
     'keep_idle_prob': 0.1,   # Probability of keeping stationary frames during training
     
     # --- Loss Function Weights ---
-    'w_phys': 1.0,           # Weight for VICReg Invariance + Variance loss
-    'w_cov': 1.0,            # Weight for VICReg Covariance loss
     'w_safe': 2.0,           # Weight for safety/critic loss
     'w_act': 10.0,           # Weight for action (throttle/steer) prediction loss
     
@@ -84,6 +80,7 @@ CONFIG = {
 
 # Automatically select GPU if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 # ==========================================
 # GPU DATA AUGMENTATION
 # ==========================================
@@ -219,7 +216,6 @@ def process_and_pack(data_dir, output_dir):
     # Write everything into a single binary blob
     with open(bin_path, 'wb') as f_bin:
         with Pool(cpu_count()) as pool:
-        # with Pool(processes=4) as pool:
             for result in tqdm(pool.imap(_process_video_jpg, worker_args), total=len(video_files)):
                 if result:
                     jpg_bytes_list, meta_list = result
@@ -354,9 +350,9 @@ class JPGDataset(Dataset):
 # ==========================================
 # PART 3: ARCHITECTURE (LATE FUSION)
 # ==========================================
-class RoverJEPA_v2(nn.Module):
+class RoverLSTM(nn.Module):
     """
-    Main Model Architecture combining DINOv2 (Vision), a Transformer Encoder (Temporal),
+    Main Model Architecture combining DINOv2 (Vision), a Bidirectional LSTM (Temporal),
     and a Mixture of Experts (Action/Policy routing).
     """
     def __init__(self):
@@ -381,33 +377,17 @@ class RoverJEPA_v2(nn.Module):
         # Temporal Modeling Components
         self.input_proj = nn.Linear(self.embed_dim, self.hidden_dim)
         self.pos_embed = nn.Parameter(torch.zeros(1, CONFIG['seq_len'], self.hidden_dim))
-        
-        # JEPA Mask Token (replaces masked frames during training)
-        self.mask_token = nn.Parameter(torch.randn(1, 1, self.hidden_dim) * 0.02)
-        
-        # Transformer processes the sequence of frames
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.hidden_dim, 
-            nhead=CONFIG['n_heads'], 
-            dim_feedforward=self.hidden_dim*4, 
-            dropout=0.1, 
+
+        # Bidirectional LSTM processes the sequence of frames
+        # We set hidden_size = hidden_dim // 2 so that since it's bidirectional,
+        # the concatenated output will be exactly hidden_dim to match downstream layers.
+        self.lstm = nn.LSTM(
+            input_size=self.hidden_dim,
+            hidden_size=self.hidden_dim // 2,
+            num_layers=CONFIG['n_layers'],
             batch_first=True,
-            norm_first=True
-        )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=CONFIG['n_layers'])
-        
-        # JEPA Projections (Maps latents and targets to the same space for VICReg loss)
-        self.predictor = nn.Sequential(
-            nn.Linear(self.hidden_dim, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Linear(256, CONFIG['proj_dim'])
-        )
-        self.target_projector = nn.Sequential(
-            nn.Linear(self.embed_dim, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Linear(256, CONFIG['proj_dim'])
+            bidirectional=True,
+            dropout=0.1 if CONFIG['n_layers'] > 1 else 0.0,
         )
 
         # Policy & Routing Components
@@ -442,22 +422,24 @@ class RoverJEPA_v2(nn.Module):
 
     def encode(self, x):
         return self.backbone(x)
-    
+
     def forward_from_features(self, feats):
         """Processes pre-extracted features through the temporal and policy layers."""
         x = self.input_proj(feats)
         x = x + self.pos_embed[:, :feats.size(1), :]
         
-        latent_seq = self.transformer(x) 
+        latent_seq, (h_n, c_n) = self.lstm(x) 
         
-        final_state = latent_seq[:, -1, :]
+        final_forward = h_n[-2] 
+        final_backward = h_n[-1]
+        
+        final_state = torch.cat([final_forward, final_backward], dim=-1)
         
         return final_state, latent_seq
 
     def forward_sequence(self, images):
         """
-        Processes a sequence of images through the backbone and temporal transformer.
-        Applies random masking during training for the JEPA objective.
+        Processes a sequence of images through the backbone and temporal LSTM.
         """
         B, S, C, H, W = images.shape
         flat_imgs = images.view(B*S, C, H, W)
@@ -468,24 +450,11 @@ class RoverJEPA_v2(nn.Module):
             
         x = self.input_proj(feats) 
         x = x + self.pos_embed[:, :S, :]
-        
-        # Self-supervised objective: Mask random frames (except the current frame)
-        if self.training:
-            mask = torch.rand(B, S, 1, device=x.device) < 0.15
-            mask[:, 0, :] = False 
-            x = torch.where(mask, self.mask_token, x)
-        
-        # Prevent transformer from looking into the future
-        attn_mask = nn.Transformer.generate_square_subsequent_mask(S, device=x.device)
-        latent_seq = self.transformer(x, mask=attn_mask, is_causal=True)
-        
-        return latent_seq, feats
 
-    def get_jepa_projections(self, latents_pred, feats_target):
-        """Projects transformer latents and target backbone features for self-supervised loss."""
-        pred_proj = self.predictor(latents_pred)
-        target_proj = self.target_projector(feats_target)
-        return pred_proj, target_proj
+        # Process with bidirectional LSTM
+        latent_seq, (h_n, c_n) = self.lstm(x)
+
+        return latent_seq, feats
 
     def get_action_heads(self, latents, context_sequence):
         """
@@ -525,38 +494,9 @@ class RoverJEPA_v2(nn.Module):
         
         return action_chunks, safety_logits, routing_weights
 
-
-
 # ==========================================
 # PART 4: LOSS FUNCTIONS
 # ==========================================
-def robust_vicreg_loss(x, y):
-    """
-    Variance-Invariance-Covariance Regularization.
-    Forces representations to be similar (Invariance), prevents collapse (Variance),
-    and decorrelates dimensions (Covariance).
-    """
-    # 1. Invariance (MSE between representations)
-    loss_inv = F.mse_loss(x, y)
-    
-    # 2. Variance (Hinge loss on standard deviation)
-    std_x = torch.sqrt(x.var(dim=0) + 1e-04)
-    std_y = torch.sqrt(y.var(dim=0) + 1e-04)
-    loss_var = torch.mean(F.relu(1 - std_x)) + torch.mean(F.relu(1 - std_y))
-    
-    # 3. Covariance (Decorrelate dimensions)
-    N, D = x.shape
-    x = x - x.mean(dim=0)
-    y = y - y.mean(dim=0)
-    cov_x = (x.T @ x) / (N - 1)
-    cov_y = (y.T @ y) / (N - 1)
-    
-    # Ignore the diagonal (variances) and sum the off-diagonals (covariances)
-    mask = ~torch.eye(D, dtype=torch.bool, device=x.device)
-    loss_cov = cov_x[mask].pow(2).sum() / D + cov_y[mask].pow(2).sum() / D
-    
-    return loss_inv, loss_var, loss_cov
-
 def weighted_action_loss(pred_chunks, target_chunks):
     """
     Custom Action Loss:
@@ -605,45 +545,19 @@ def train_model(args):
         train_dataset, 
         batch_size=batch_size, 
         sampler=sampler, 
-        num_workers=8,            
+        num_workers=8,               
         pin_memory=True, 
         drop_last=True,
         prefetch_factor=3,           
         persistent_workers=True      
     )
     
-
-    CONFIG['val_check_ratio'] = 0.10 
-
     val_loader = None
     if len(val_dataset) > 0:
-        # num_train = len(train_dataset)
-        # dynamic_val_size = int(num_train * CONFIG['val_check_ratio'])
-        # # target_size = max(100, min(dynamic_val_size, 2000))
-        # target_size = 100
-        # if len(val_dataset) > target_size:
-        #     indices = np.random.RandomState(42).choice(
-        #         len(val_dataset), target_size, replace=False
-        #     )
-        #     val_dataset = Subset(val_dataset, indices)
-        
-        # We use a larger batch size for validation because there's no autograd overhead
-        # val_batch_size = CONFIG['batch_size'] * 2 
-        val_batch_size = CONFIG['batch_size']
-        
-        val_loader = DataLoader(
-            val_dataset, 
-            batch_size=val_batch_size, 
-            shuffle=False, 
-            num_workers=8,               # Match training workers for fast JPEG decoding
-            pin_memory=True, 
-            drop_last=True,
-            prefetch_factor=2,           # Keep the CPU ahead of the GPU
-            persistent_workers=True      
-        )
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, 
+                                num_workers=8, pin_memory=True, drop_last=True)
 
-    model = RoverJEPA_v2().to(device)
-
+    model = RoverLSTM().to(device)
     print(f"Model Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
     
     # Separate parameter groups for differential learning rates
@@ -680,7 +594,7 @@ def train_model(args):
         model.train()
         loop = tqdm(train_loader, desc=f"Ep {epoch+1}/{args.epochs}")
         
-        metrics = {'phys': 0, 'cov': 0, 'safe': 0, 'act': 0}
+        metrics = {'safe': 0, 'act': 0}
         
         for i, (imgs, action_chunks, contexts, stucks) in enumerate(loop):
             imgs = imgs.to(device, non_blocking=True)
@@ -710,8 +624,6 @@ def train_model(args):
                 # Forward Pass
                 latents, feats = model.forward_sequence(imgs_aug)
                 
-                offset = CONFIG.get('jepa_offset', 1)
-                
                 # Flatten sequences for loss calculations
                 latents_flat = latents.reshape(-1, model.hidden_dim)
                 contexts_flat = contexts.reshape(-1, 2)
@@ -726,19 +638,9 @@ def train_model(args):
                 # Load balancing loss for MoE (forces router to use all experts)
                 expert_usage = routing_weights.mean(dim=0)
                 cv_loss = expert_usage.var()
-                
-                # JEPA Evaluation (Predict feature offsets `offset` steps into the future)
-                latents_pred = latents[:, :-offset].reshape(-1, model.hidden_dim)
-                feats_target = feats[:, offset:].reshape(-1, model.embed_dim)
-                p_pred, p_target = model.get_jepa_projections(latents_pred, feats_target)
-                
-                l_inv, l_var, l_cov = robust_vicreg_loss(p_pred, p_target)
-                loss_phys = l_inv + l_var
-                
+
                 # Total Combined Loss
-                loss_total = (CONFIG['w_phys'] * loss_phys) + \
-                             (CONFIG['w_cov'] * l_cov) + \
-                             (CONFIG['w_safe'] * loss_safe) + \
+                loss_total = (CONFIG['w_safe'] * loss_safe) + \
                              (CONFIG['w_act'] * loss_act) + \
                              (0.1 * cv_loss)
             
@@ -748,13 +650,9 @@ def train_model(args):
             optimizer.step()
             
             # Logging
-            metrics['phys'] += loss_phys.item()
-            metrics['cov'] += l_cov.item()
             metrics['act'] += loss_act.item()
             loop.set_postfix({
-                'Tot': f"{loss_total.item():.2f}",   
-                'Phy': f"{loss_phys.item():.2f}",    
-                'Cov': f"{l_cov.item():.2f}",        
+                'Tot': f"{loss_total.item():.2f}",         
                 'Act': f"{loss_act.item():.2f}",      
                 'Safe': f"{loss_safe.item():.3f}"    
             })   
@@ -762,10 +660,10 @@ def train_model(args):
         # ==================== VALIDATION ====================
         if val_loader:
             model.eval()
-            val_metrics = {'tot': 0.0, 'phys': 0.0, 'cov': 0.0, 'act': 0.0, 'safe': 0.0}
+            val_metrics = {'tot': 0.0, 'act': 0.0, 'safe': 0.0}
             val_loop = tqdm(val_loader, desc="Validation", leave=False)
             
-            with torch.inference_mode(), torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            with torch.no_grad():
                 for i, (imgs, act_chunks, ctx, stuck) in enumerate(val_loop):
                     imgs = imgs.to(device)
                     ctx = ctx.to(device)
@@ -778,7 +676,6 @@ def train_model(args):
                     
                     latents, feats = model.forward_sequence(imgs_aug)
                     
-                    offset = CONFIG.get('jepa_offset', 1)
                     latents_flat = latents.reshape(-1, model.hidden_dim)
                     contexts_flat = ctx.reshape(-1, 2)
                     action_targets_flat = act_chunks.reshape(-1, CONFIG['action_horizon'], 2)
@@ -791,58 +688,49 @@ def train_model(args):
                     expert_usage = routing_weights.mean(dim=0)
                     cv_loss = expert_usage.var()
 
-                    latents_pred = latents[:, :-offset].reshape(-1, model.hidden_dim)
-                    feats_target = feats[:, offset:].reshape(-1, model.embed_dim)
-                    p_pred, p_target = model.get_jepa_projections(latents_pred, feats_target)
-                    
-                    li, lv, lc = robust_vicreg_loss(p_pred, p_target)
-                    loss_phys = li + lv
-                    
-                    loss_total = (CONFIG['w_phys'] * loss_phys) + \
-                                 (CONFIG['w_cov'] * lc) + \
-                                 (CONFIG['w_safe'] * loss_safe) + \
+                    loss_phys = torch.tensor(0.0, device=device)
+                    l_cov = torch.tensor(0.0, device=device)
+
+                    loss_total = (CONFIG['w_safe'] * loss_safe) + \
                                  (CONFIG['w_act'] * loss_act) + \
                                  (0.1 * cv_loss)
-                    
                     val_metrics['tot'] += loss_total.item()
-                    val_metrics['phys'] += loss_phys.item()
-                    val_metrics['cov'] += lc.item()
                     val_metrics['act'] += loss_act.item()
                     val_metrics['safe'] += loss_safe.item()
                     
                     val_loop.set_postfix({
                         'Tot': f"{val_metrics['tot'] / (i+1):.2f}",
-                        'Phy': f"{val_metrics['phys'] / (i+1):.2f}",
-                        'Cov': f"{val_metrics['cov'] / (i+1):.2f}",
                         'Act': f"{val_metrics['act'] / (i+1):.2f}",
                         'Safe': f"{val_metrics['safe'] / (i+1):.3f}"
                     })
             
             avg_val_tot = val_metrics['tot'] / len(val_loader)
-            avg_val_phys = val_metrics['phys'] / len(val_loader)
             avg_val_act = val_metrics['act'] / len(val_loader)
             avg_val_safe = val_metrics['safe'] / len(val_loader)
             
-            print(f"  -> Val Loss | Tot: {avg_val_tot:.2f} | Phy: {avg_val_phys:.2f} | Act: {avg_val_act:.2f} | Safe: {avg_val_safe:.3f}")
+            print(f"  -> Val Loss | Tot: {avg_val_tot:.2f} | Act: {avg_val_act:.2f} | Safe: {avg_val_safe:.3f}")
             
             # Calculate a functional score that ignores the self-supervised penalties for checkpointing
             functional_val_loss = avg_val_act + avg_val_safe
+
             
+
             # Early Stopping and Checkpointing Check
             if functional_val_loss < best_val_loss:
                 best_val_loss = functional_val_loss
                 patience_counter = 0 
-                torch.save(model.state_dict(), os.path.join(args.save_dir, "best_jepa_v2.pth"))
+                torch.save(model.state_dict(), os.path.join(args.save_dir, "best_lstm_v2.pth"))
                 print(f"     [Saved Best Model (Action + Safe)]")
             else:
                 patience_counter += 1
                 print(f"     [No Improve] Patience: {patience_counter}/{CONFIG['patience']}")
-            
-            
+                
+            if patience_counter >= CONFIG['patience']:
+                print(f"Early stopping triggered after {epoch+1} epochs.")
+                break
 
-            metrics = evaluate_model(RoverJEPA_v2().to(device), "runs/best_jepa_v2.pth", "/", runs=9)
+            metrics = evaluate_model(RoverLSTM().to(device), os.path.join(args.save_dir, "best_lstm_v2.pth"), "/", runs=9)
             metrics["tot"] = avg_val_tot
-            metrics["phys"] = avg_val_phys
             metrics["act"] = avg_val_act
             metrics["safe"] = avg_val_safe
 
@@ -860,14 +748,9 @@ def train_model(args):
                     writer.writeheader()
                     
                 writer.writerow(row)
-
-            if patience_counter >= CONFIG['patience']:
-                print(f"Early stopping triggered after {epoch+1} epochs.")
-                break
                 
         # Always save the latest model as well
         torch.save(model.state_dict(), os.path.join(args.save_dir, "latest_jepa_v2.pth"))
-
 
 # ==========================================
 # PART 6: VISUALIZATION (OPEN LOOP + HUD)
@@ -878,7 +761,7 @@ def visualize(args):
     Reads a video, runs the model on rolling sequences of frames, and 
     overlays a HUD comparing Ground Truth (Human) vs Model predictions.
     """
-    model = RoverJEPA_v2().to(device)
+    model = RoverLSTM().to(device)
     
     # Load checkpoint, strip `_orig_mod.` prefixes which are added by `torch.compile`
     checkpoint = torch.load(args.checkpoint, map_location=device)
@@ -1010,7 +893,7 @@ def visualize(args):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
         
         # Display the frame
-        cv2.imshow("RoverJEPA Deterministic", frame)
+        cv2.imshow("RoverLSTM Deterministic", frame)
         if cv2.waitKey(1) == ord('q'): 
             break
             
@@ -1023,7 +906,7 @@ def visualize(args):
 # CLI ENTRY POINT
 # ==========================================
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="RoverJEPA v2 - Training and Inference Pipeline")
+    parser = argparse.ArgumentParser(description="RoverLSTM - Training and Inference Pipeline")
     sub = parser.add_subparsers(dest='mode', required=True)
     
     # Mode 1: Preprocess
@@ -1032,7 +915,7 @@ if __name__ == "__main__":
     p_pre.add_argument('--output', required=True, help="Directory to save the packed binary dataset")
     
     # Mode 2: Train
-    p_train = sub.add_parser('train', help="Trains the RoverJEPA model.")
+    p_train = sub.add_parser('train', help="Trains the RoverLSTM model.")
     p_train.add_argument('--dataset', required=True, help="Directory containing the packed dataset")
     p_train.add_argument('--save_dir', default='runs', help="Directory to save checkpoints")
     p_train.add_argument('--epochs', type=int, default=CONFIG['epochs'], help="Number of epochs to train")

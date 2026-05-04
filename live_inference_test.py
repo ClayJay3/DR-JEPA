@@ -8,6 +8,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms.v2 as v2 
 import torchvision.models as models
+import importlib.util
+import sys
+import os
+import random
 
 # ==========================================
 # CONFIGURATION
@@ -380,7 +384,6 @@ class RunBasedRoverSim:
             if math.hypot(obj.x - self.x, obj.z - self.z) < 30.0:
                 alive_objects.append(obj)
         self.objects = alive_objects
-
         spawn_type = self.current_biome
 
         print(f"\n>>> Generating New Chunk Biome: {spawn_type.upper()} <<<")
@@ -589,7 +592,7 @@ class RunBasedRoverSim:
 # ==========================================
 # MODEL ARCHITECTURE (Fully Synced with Training)
 # ==========================================
-class RoverJEPA_v2_Transformer(nn.Module):
+class RoverJEPA_v2(nn.Module):
     def __init__(self):
         super().__init__()
         
@@ -716,7 +719,12 @@ class RoverJEPA_v2_Transformer(nn.Module):
 
 
 
-def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
+def evaluate_model(model, checkpoint_path, output_video_path, runs=9, base_seed=100):
+    py_rng_state = random.getstate()
+    np_rng_state = np.random.get_state()
+    torch_rng_state = torch.get_rng_state()
+    if torch.cuda.is_available():
+        cuda_rng_state = torch.cuda.get_rng_state_all()
     print(f"Loading Model from {checkpoint_path}...")
 
     checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -741,6 +749,12 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
     seq_buffer_feats = torch.zeros((1, CONFIG['seq_len'], CONFIG['embed_dim']), device=device)
     actual_steer = 0.0 
     for i in range(runs):
+        run_seed = base_seed + i
+        random.seed(run_seed)
+        np.random.seed(run_seed)
+        torch.manual_seed(run_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(run_seed)
         prev_pred_str = 0
         sim.reset_run()
         while True:
@@ -779,10 +793,10 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
 
                 seq_buffer_feats = torch.cat([seq_buffer_feats[:, 1:, :], new_feat], dim=1)
 
-                latents = model.forward_from_features(seq_buffer_feats)
-                last_latent = latents[:, -1, :]
+                final_state, latent_seq = model.forward_from_features(seq_buffer_feats)
+                best_chunk, safe_logits, routing_weights = model.get_action_heads(final_state, ctx_now)
                 
-                best_chunk, safe_logits, routing_weights = model.get_action_heads(last_latent, ctx_now)
+
                 
                 danger_tensor = torch.sigmoid(safe_logits)
                 danger_prob = danger_tensor.item() 
@@ -828,7 +842,11 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
         # out_writer.release()
         # cv2.destroyAllWindows()
     
-    
+    random.setstate(py_rng_state)
+    np.random.set_state(np_rng_state)
+    torch.set_rng_state(torch_rng_state)
+    if torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(cuda_rng_state)
     
     print(sim.metrics)
     return sim.metrics
@@ -838,11 +856,19 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=5):
 # ==========================================
 # MAIN LIVE DEPLOYMENT LOOP
 # ==========================================
-def deploy_live(checkpoint_path, output_video_path):
+def deploy_live(checkpoint_path, output_video_path, model_type):
     print(f"Loading Model from {checkpoint_path}...")
-    model = RoverJEPA_v2_Transformer().to(device)
+    if model_type.lower() == 'lstm':
+        # Dynamically load from a module with a hyphen in the filename
+        spec = importlib.util.spec_from_file_location("DR_LSTM", os.path.join(os.path.dirname(__file__), "DR-LSTM.py"))
+        dr_lstm_module = importlib.util.module_from_spec(spec)
+        sys.modules["DR_LSTM"] = dr_lstm_module
+        spec.loader.exec_module(dr_lstm_module)
+        model = dr_lstm_module.RoverLSTM().to(device)
+    else:
+        model = RoverJEPA_v2().to(device)
     
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     
     clean_state_dict = {k.replace('_orig_mod.', ''): v for k, v in checkpoint.items()}
         
@@ -968,9 +994,10 @@ def deploy_live(checkpoint_path, output_video_path):
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Live deployment of RoverJEPA in an infinite synthetic world.")
+    parser = argparse.ArgumentParser(description="Live deployment of RoverJEPA/LSTM in an infinite synthetic world.")
     parser.add_argument('--checkpoint', required=True, help="Path to the trained .pth model file.")
     parser.add_argument('--output_video', default='live_run.webm', help="Output path for the video recording.")
+    parser.add_argument('--model', default='jepa', choices=['jepa', 'lstm'], help="Which architecture to load from the checkpoint (jepa or lstm).")
     args = parser.parse_args()
     
-    deploy_live(args.checkpoint, args.output_video)
+    deploy_live(args.checkpoint, args.output_video, args.model)
