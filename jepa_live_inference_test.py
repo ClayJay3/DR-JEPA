@@ -10,7 +10,6 @@ import torchvision.transforms.v2 as v2
 import torchvision.models as models
 import importlib.util
 import sys
-import os
 import random
 
 # ==========================================
@@ -667,6 +666,17 @@ class RoverJEPA_v2(nn.Module):
     def encode(self, x):
         return self.backbone(x)
 
+    def forward_from_features(self, feats):
+        """Processes pre-extracted sequence features through the Transformer."""
+        S = feats.size(1)
+        x = self.input_proj(feats)
+        x = x + self.pos_embed[:, :S, :]
+        
+        # During live inference caching, we don't apply masking to the input tokens.
+        attn_mask = nn.Transformer.generate_square_subsequent_mask(S, device=x.device)
+        latent_seq = self.transformer(x, mask=attn_mask, is_causal=True)
+        return latent_seq, feats
+
     def forward_sequence(self, images):
         B, S, C, H, W = images.shape
         flat_imgs = images.view(B*S, C, H, W)
@@ -718,7 +728,6 @@ class RoverJEPA_v2(nn.Module):
         return action_chunks, safety_logits, routing_weights
 
 
-
 def evaluate_model(model, checkpoint_path, output_video_path, runs=9, base_seed=100):
     py_rng_state = random.getstate()
     np_rng_state = np.random.get_state()
@@ -727,7 +736,7 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=9, base_seed=
         cuda_rng_state = torch.cuda.get_rng_state_all()
     print(f"Loading Model from {checkpoint_path}...")
 
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     
     clean_state_dict = {k.replace('_orig_mod.', ''): v for k, v in checkpoint.items()}
         
@@ -746,8 +755,10 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=9, base_seed=
     img_t = torch.from_numpy(initial_rgb).permute(2, 0, 1).float().div(255.0).unsqueeze(0).to(device)
     img_t = gpu_val_transform(img_t)
     
+    # Initialize rolling feature buffer 
     seq_buffer_feats = torch.zeros((1, CONFIG['seq_len'], CONFIG['embed_dim']), device=device)
     actual_steer = 0.0 
+    
     for i in range(runs):
         run_seed = base_seed + i
         random.seed(run_seed)
@@ -789,14 +800,19 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=9, base_seed=
             img_t = gpu_val_transform(img_t)
             
             with torch.no_grad(), torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                # Efficient feature caching: run DINOv2 ONLY on the newest frame
                 new_feat = model.encode(img_t).unsqueeze(1) # Shape: (1, 1, embed_dim)
 
                 seq_buffer_feats = torch.cat([seq_buffer_feats[:, 1:, :], new_feat], dim=1)
 
-                final_state, latent_seq = model.forward_from_features(seq_buffer_feats)
-                best_chunk, safe_logits, routing_weights = model.get_action_heads(final_state, ctx_now)
-                
+                # Route correctly depending on if the model is JEPA or the dynamic LSTM
+                if isinstance(model, RoverJEPA_v2):
+                    latent_seq, _ = model.forward_from_features(seq_buffer_feats)
+                    state_for_head = latent_seq[:, -1, :]
+                else:
+                    state_for_head, _ = model.forward_from_features(seq_buffer_feats)
 
+                best_chunk, safe_logits, routing_weights = model.get_action_heads(state_for_head, ctx_now)
                 
                 danger_tensor = torch.sigmoid(safe_logits)
                 danger_prob = danger_tensor.item() 
@@ -887,7 +903,8 @@ def deploy_live(checkpoint_path, output_video_path, model_type):
     img_t = torch.from_numpy(initial_rgb).permute(2, 0, 1).float().div(255.0).unsqueeze(0).to(device)
     img_t = gpu_val_transform(img_t)
     
-    seq_buffer_imgs = [img_t for _ in range(CONFIG['seq_len'])]
+    # Initialize rolling feature buffer
+    seq_buffer_feats = torch.zeros((1, CONFIG['seq_len'], CONFIG['embed_dim']), device=device)
     actual_steer = 0.0 
     
     while True:
@@ -918,16 +935,19 @@ def deploy_live(checkpoint_path, output_video_path, model_type):
         img_t = torch.from_numpy(frame_rgb).permute(2, 0, 1).float().div(255.0).unsqueeze(0).to(device)
         img_t = gpu_val_transform(img_t)
         
-        seq_buffer_imgs.append(img_t)
-        seq_buffer_imgs.pop(0)
-
-        input_imgs = torch.stack(seq_buffer_imgs, dim=1)
-        
         with torch.no_grad(), torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-            latents, _ = model.forward_sequence(input_imgs)
-            last_latent = latents[:, -1, :]
-            
-            best_chunk, safe_logits, routing_weights = model.get_action_heads(last_latent, ctx_now)
+            # Optimised: only run heavy vision backbone on the incoming 1 frame 
+            new_feat = model.encode(img_t).unsqueeze(1)
+            seq_buffer_feats = torch.cat([seq_buffer_feats[:, 1:, :], new_feat], dim=1)
+
+            # Route correctly depending on if the model is JEPA or the dynamic LSTM
+            if model_type.lower() == 'jepa':
+                latent_seq, _ = model.forward_from_features(seq_buffer_feats)
+                state_for_head = latent_seq[:, -1, :]
+            else:
+                state_for_head, _ = model.forward_from_features(seq_buffer_feats)
+
+            best_chunk, safe_logits, routing_weights = model.get_action_heads(state_for_head, ctx_now)
             
             danger_tensor = torch.sigmoid(safe_logits)
             danger_prob = danger_tensor.item() 
