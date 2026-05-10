@@ -298,6 +298,7 @@ class RunBasedRoverSim:
         self.x = 0.0
         self.z = 0.0
         self.yaw = 0.0 
+        self.current_speed = 0.0
         self.run_number = 0
         self.run_steps = 0
         self.goal_distance = 175
@@ -323,7 +324,12 @@ class RunBasedRoverSim:
             "total_alignment": 0,
             "mean_alignment": 0,
             "total_path_efficiency": 0,
-            "mean_path_efficiency": 0
+            "mean_path_efficiency": 0,
+            "total_speed_when_colliding": 0,
+            "mean_speed_when_colliding": 0,
+            "steps_near_obstacle": 0,
+            "total_speed_near_obstacle": 0,
+            "mean_speed_near_obstacle": 0,
         }
     
     def reset_run(self):
@@ -342,6 +348,7 @@ class RunBasedRoverSim:
         self.current_biome = self.biome_cycle[self.run_number % len(self.biome_cycle)]
         self._spawn_goal(self.goal_distance)
         self.metrics["total_goal_distance"] += self.goal_distance
+        self.metrics["distance_traveled"] = 0
         self._generate_landscape()
 
     def _spawn_goal(self, distance):
@@ -433,21 +440,53 @@ class RunBasedRoverSim:
             return True
         return False
     
-    def is_colliding(self, length=1):
+    def check_obstacle_state(self, near_threshold=5.0, length=1):
+        is_near_obstacle = False
+
         for obj in self.objects:
             if obj.type == 'goal':
                 continue
-                
+
             relative_x = abs(obj.x - self.x)
-            relative_y = abs(obj.z - self.z)
-            if relative_x <= (obj.width / 2) + length / 2 and relative_y <= (obj.depth / 2) + length / 2:
+            relative_z = abs(obj.z - self.z)
+
+            collision_x = (obj.width / 2) + (length / 2)
+            collision_z = (obj.depth / 2) + (length / 2)
+
+            near_x = collision_x + near_threshold
+            near_z = collision_z + near_threshold
+
+            inside_collision_box = (
+                relative_x <= collision_x and
+                relative_z <= collision_z
+            )
+
+            inside_near_box = (
+                relative_x <= near_x and
+                relative_z <= near_z
+            )
+
+            if inside_collision_box:
                 if not self.collision_state:
                     self.metrics["total_unique_collisions"] += 1
-                    self.metrics["mean_unique_collisions"] = self.metrics["total_unique_collisions"] / self.metrics["total_runs"] if self.metrics["total_runs"] > 0 else 0
+                    self.metrics["mean_unique_collisions"] = (
+                        self.metrics["total_unique_collisions"] /
+                        self.metrics["total_runs"]
+                        if self.metrics["total_runs"] > 0 else 0
+                    )
+
                 self.collision_state = True
-                return True
+                return True, False
+
+            if inside_near_box:
+                is_near_obstacle = True
+
         self.collision_state = False
-        return False
+        return False, is_near_obstacle
+
+    def is_colliding(self, length=1):
+        is_colliding, _ = self.check_obstacle_state(length=length)
+        return is_colliding
 
     def step(self, angular_velocity, linear_velocity):
         dt = 0.1
@@ -459,6 +498,7 @@ class RunBasedRoverSim:
         self.z += dz
 
         distance_traveled = math.sqrt(dx**2 + dz**2)
+        self.current_speed = distance_traveled / dt
         self.run_steps += 1
         self.metrics["total_steps"] += 1
         self.metrics["distance_traveled"] += distance_traveled
@@ -579,10 +619,10 @@ class RoverLSTM(nn.Module):
 
         self.lstm = nn.LSTM(
             input_size=self.hidden_dim,
-            hidden_size=self.hidden_dim // 2,
+            hidden_size=self.hidden_dim,
             num_layers=CONFIG['n_layers'],
             batch_first=True,
-            bidirectional=True,
+            bidirectional=False,
             dropout=0.1 if CONFIG['n_layers'] > 1 else 0.0,
         )
 
@@ -621,11 +661,8 @@ class RoverLSTM(nn.Module):
         
         latent_seq, (h_n, c_n) = self.lstm(x) 
         
-        final_forward = h_n[-2] 
-        final_backward = h_n[-1]
-        
-        final_state = torch.cat([final_forward, final_backward], dim=-1)
-        
+        final_state = h_n[-1]
+
         return final_state, latent_seq
 
     def forward_sequence(self, images):
@@ -759,10 +796,28 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=9, base_seed=
 
             actual_steer += 0.2 * (pred_str - actual_steer)
             sim.step(angular_velocity=actual_steer * 30.0, linear_velocity=10.0 * pred_thr)
-
-            if sim.is_colliding():
+            is_colliding, is_near_obstacle = sim.check_obstacle_state(
+                near_threshold=5.0,
+                length=1
+            )
+            if is_colliding:
                 sim.metrics["steps_spent_colliding"] += 1
-                
+
+
+                sim.metrics["total_speed_when_colliding"] += sim.current_speed
+                sim.metrics["mean_speed_when_colliding"] = (
+                    sim.metrics["total_speed_when_colliding"] /
+                    sim.metrics["steps_spent_colliding"]
+                )
+            elif is_near_obstacle:
+                sim.metrics["steps_near_obstacle"] += 1
+
+                sim.metrics["total_speed_near_obstacle"] += sim.current_speed
+                sim.metrics["mean_speed_near_obstacle"] = (
+                    sim.metrics["total_speed_near_obstacle"] /
+                    sim.metrics["steps_near_obstacle"]
+                )
+                            
     random.setstate(py_rng_state)
     np.random.set_state(np_rng_state)
     torch.set_rng_state(torch_rng_state)

@@ -314,6 +314,7 @@ class RunBasedRoverSim:
         self.x = 0.0
         self.z = 0.0
         self.yaw = 0.0 
+        self.current_speed = 0.0
         self.run_number = 0
         self.run_steps = 0
         self.goal_distance = 175
@@ -339,7 +340,12 @@ class RunBasedRoverSim:
             "total_alignment": 0,
             "mean_alignment": 0,
             "total_path_efficiency": 0,
-            "mean_path_efficiency": 0
+            "mean_path_efficiency": 0,
+            "total_speed_when_colliding": 0,
+            "mean_speed_when_colliding": 0,
+            "steps_near_obstacle": 0,
+            "total_speed_near_obstacle": 0,
+            "mean_speed_near_obstacle": 0,
         }
     
     def reset_run(self):
@@ -358,8 +364,8 @@ class RunBasedRoverSim:
         self.current_biome = self.biome_cycle[self.run_number % len(self.biome_cycle)]
         self._spawn_goal(self.goal_distance)
         self.metrics["total_goal_distance"] += self.goal_distance
+        self.metrics["distance_traveled"] = 0
         self._generate_landscape()
-
 
     def _spawn_goal(self, distance):
         angle = self.yaw + np.random.uniform(-45, 45)
@@ -367,16 +373,13 @@ class RunBasedRoverSim:
         gz = self.z + math.cos(math.radians(angle)) * distance
         self.goal = WorldObject(gx, gz, 4, 40, 4, CONFIG['c_goal'], 'goal')
         
-        # Ensure goal replaces the old one and remains in objects list
         self.objects = [obj for obj in self.objects if obj.type != 'goal']
         self.objects.insert(0, self.goal)
 
     def _generate_landscape(self):
-        """Generates dynamic biomes mimicking the training data scenarios."""
         self.last_gen_x = self.x
         self.last_gen_z = self.z
         
-        # Cull old objects to prevent memory bloat, but keep very close ones to avoid visual popping
         alive_objects = [self.goal]
         for obj in self.objects:
             if obj.type == 'goal': continue
@@ -392,45 +395,38 @@ class RunBasedRoverSim:
         sin_y = math.sin(c_rad)
 
         def add_obj(local_x, local_z, w, h, d, color, otype):
-            # Prevent spawning directly on top of the rover
             if local_z < 15 and abs(local_x) < 5:
                 return 
-            # Transform local to world coordinates
             wx = self.x + local_x * cos_y + local_z * sin_y
             wz = self.z - local_x * sin_y + local_z * cos_y
             self.objects.append(WorldObject(wx, wz, w, h, d, color, otype))
 
         if spawn_type == 'wall':
-            # Spawn multiple layers of walls with gaps along the chunk path
             for wall_z in [50, 150, 250, 350]:
                 gap_center = np.random.uniform(-15, 15)
                 for ox in range(-40, 41, 4):
                     if abs(ox - gap_center) < 8.0: 
-                        continue # Leave a gap for the rover to pass
+                        continue 
                     noisy_ox = ox + np.random.uniform(-0.5, 0.5)
                     add_obj(noisy_ox, wall_z + np.random.uniform(-1, 1), 4.0, 1.5, 4.0, CONFIG['c_rock'], 'rock')
             
-            # Scatter a few standard rocks between the walls
             for _ in range(150):
                 ox = np.random.uniform(-100, 100)
                 oz = np.random.uniform(10, 400)
                 add_obj(ox, oz, 4.0, 1.5, 4.0, CONFIG['c_rock'], 'rock')
 
         elif spawn_type == 'dense':
-            # Tight corridor of dense trees
             for _ in range(500):
                 ox = np.random.uniform(-40, 40)
                 oz = np.random.uniform(20, 400)
                 add_obj(ox, oz, 1.0, 10.0, 1.0, CONFIG['c_tree'], 'tree')
                 
-            # Throw in some rocks into the dense forest
             for _ in range(50):
                 ox = np.random.uniform(-40, 40)
                 oz = np.random.uniform(20, 400)
                 add_obj(ox, oz, 4.0, 1.5, 4.0, CONFIG['c_rock'], 'rock')
 
-        else: # normal
-            # Standard wide dispersal of mixed obstacles
+        else: 
             for _ in range(400):
                 ox = np.random.uniform(-150, 150)
                 oz = np.random.uniform(10, 400)
@@ -445,7 +441,6 @@ class RunBasedRoverSim:
             print(">>> ROVER LEFT CHUNK! Regenerating environment... <<<")
             self._generate_landscape()
 
-    # Returns True when run should be terminated
     def check_termination_conditions(self):
         dist_to_goal = math.hypot(self.goal.x - self.x, self.goal.z - self.z)
         if self.run_steps > 500:
@@ -453,35 +448,61 @@ class RunBasedRoverSim:
             return True
         elif dist_to_goal < 15.0:
             self.metrics["reached_goal"] += 1
-            # measure how efficient the path was (full efficiency may not be good if obstacles block path)
             shortest_path_distance = math.sqrt(self.goal.x ** 2 + self.goal.z ** 2)
-
             path_efficiency = shortest_path_distance / self.metrics["distance_traveled"]
             self.metrics["total_path_efficiency"] += path_efficiency
-
-            # Mean of completed runs, not total
             self.metrics["mean_path_efficiency"] = self.metrics["total_path_efficiency"] / self.metrics["reached_goal"] if self.metrics["reached_goal"] > 0 else 0
             print(">>> GOAL REACHED!  Starting new run... <<<")
             return True
         return False
     
-    # Collision assumes rover is a square, obstacles are rectangles
-    def is_colliding(self, length=1):
+    def check_obstacle_state(self, near_threshold=5.0, length=1):
+        is_near_obstacle = False
+
         for obj in self.objects:
             if obj.type == 'goal':
                 continue
-                
+
             relative_x = abs(obj.x - self.x)
-            relative_y = abs(obj.z - self.z)
-            if relative_x <= (obj.width / 2) + length / 2 and relative_y <= (obj.depth / 2) + length / 2:
-                # Went from not colliding to colliding, so its a unique collision
+            relative_z = abs(obj.z - self.z)
+
+            collision_x = (obj.width / 2) + (length / 2)
+            collision_z = (obj.depth / 2) + (length / 2)
+
+            near_x = collision_x + near_threshold
+            near_z = collision_z + near_threshold
+
+            inside_collision_box = (
+                relative_x <= collision_x and
+                relative_z <= collision_z
+            )
+
+            inside_near_box = (
+                relative_x <= near_x and
+                relative_z <= near_z
+            )
+
+            if inside_collision_box:
                 if not self.collision_state:
                     self.metrics["total_unique_collisions"] += 1
-                    self.metrics["mean_unique_collisions"] = self.metrics["total_unique_collisions"] / self.metrics["total_runs"] if self.metrics["total_runs"] > 0 else 0
+                    self.metrics["mean_unique_collisions"] = (
+                        self.metrics["total_unique_collisions"] /
+                        self.metrics["total_runs"]
+                        if self.metrics["total_runs"] > 0 else 0
+                    )
+
                 self.collision_state = True
-                return True
+                return True, False
+
+            if inside_near_box:
+                is_near_obstacle = True
+
         self.collision_state = False
-        return False
+        return False, is_near_obstacle
+
+    def is_colliding(self, length=1):
+        is_colliding, _ = self.check_obstacle_state(length=length)
+        return is_colliding
 
     def step(self, angular_velocity, linear_velocity):
         dt = 0.1
@@ -493,23 +514,19 @@ class RunBasedRoverSim:
         self.z += dz
 
         distance_traveled = math.sqrt(dx**2 + dz**2)
+        self.current_speed = distance_traveled / dt
         self.run_steps += 1
         self.metrics["total_steps"] += 1
         self.metrics["distance_traveled"] += distance_traveled
 
-        # measure alignment
         vec_to_goal_x = self.goal.x - self.x
         vec_to_goal_z = self.goal.z - self.z
         dist_to_goal = math.sqrt(vec_to_goal_x**2 + vec_to_goal_z**2)
         if dist_to_goal > 0 and distance_traveled > 0:
             alignment = (dx * vec_to_goal_x + dz * vec_to_goal_z) / (distance_traveled * dist_to_goal)
-
             self.metrics["total_alignment"] += alignment
             self.metrics["mean_alignment"] = self.metrics["total_alignment"] / self.metrics["total_steps"] if self.metrics["total_steps"] > 0 else 0
         
-        
-
-
     def render(self):
         canvas = np.zeros((CONFIG['img_h'], CONFIG['img_w'], 3), dtype=np.uint8)
         canvas[:] = CONFIG['c_sky']
@@ -586,7 +603,7 @@ class RunBasedRoverSim:
                 avoidance_force += direction * repulsion
         
         target_steer = np.clip(target_steer + avoidance_force, -1.0, 1.0)
-        return 1.0, target_steer # Throttle, Steer
+        return 1.0, target_steer 
 
 # ==========================================
 # MODEL ARCHITECTURE (Fully Synced with Training)
@@ -836,9 +853,28 @@ def evaluate_model(model, checkpoint_path, output_video_path, runs=9, base_seed=
 
             sim.step(angular_velocity=actual_steer * 30.0, linear_velocity=10.0 * pred_thr)
             
-
-            if sim.is_colliding():
+            is_colliding, is_near_obstacle = sim.check_obstacle_state(
+                            near_threshold=5.0,
+                            length=1
+                        )
+            if is_colliding:
                 sim.metrics["steps_spent_colliding"] += 1
+
+                current_speed = abs(10.0 * pred_thr)
+
+                sim.metrics["total_speed_when_colliding"] += current_speed
+                sim.metrics["mean_speed_when_colliding"] = (
+                    sim.metrics["total_speed_when_colliding"] /
+                    sim.metrics["steps_spent_colliding"]
+                )
+            elif is_near_obstacle:
+                sim.metrics["steps_near_obstacle"] += 1
+
+                sim.metrics["total_speed_near_obstacle"] += sim.current_speed
+                sim.metrics["mean_speed_near_obstacle"] = (
+                    sim.metrics["total_speed_near_obstacle"] /
+                    sim.metrics["steps_near_obstacle"]
+                )
 
             # ==========================================
             # OVERLAY HUD
@@ -1002,7 +1038,7 @@ def deploy_live(checkpoint_path, output_video_path, model_type):
         my_end = int(cy_hud - radius * math.cos(m_angle))
         cv2.line(display_frame, (cx_hud, cy_hud), (mx_end, my_end), (0, 255, 0), 4)
         
-        display_frame = cv2.resize(display_frame, (500, 500))
+        display_frame = cv2.resize(displsay_frame, (500, 500))
         out_writer.write(display_frame)
         
         cv2.imshow("RoverJEPA - Infinite Live Deployment", display_frame)
@@ -1012,6 +1048,7 @@ def deploy_live(checkpoint_path, output_video_path, model_type):
             
     out_writer.release()
     cv2.destroyAllWindows()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Live deployment of RoverJEPA/LSTM in an infinite synthetic world.")
