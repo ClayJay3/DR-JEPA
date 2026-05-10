@@ -840,7 +840,7 @@ def train_model(args):
             
             
 
-            metrics = evaluate_model(RoverJEPA_v2().to(device), "runs/best_jepa_v2.pth", "/", runs=9)
+            metrics = evaluate_model(RoverJEPA_v2().to(device), os.path.join(args.save_dir, "best_jepa_v2.pth"), "/", runs=9)
             metrics["tot"] = avg_val_tot
             metrics["phys"] = avg_val_phys
             metrics["act"] = avg_val_act
