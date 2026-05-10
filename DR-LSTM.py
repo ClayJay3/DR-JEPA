@@ -23,7 +23,7 @@ from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 import torchvision.transforms.v2 as v2 
 import torchvision.models as models
 import torchvision
-from live_inference_test import evaluate_model
+from lstm_live_inference_test import evaluate_model
 # ==========================================
 # SYSTEM OPTIMIZATIONS
 # ==========================================
@@ -378,16 +378,14 @@ class RoverLSTM(nn.Module):
         self.input_proj = nn.Linear(self.embed_dim, self.hidden_dim)
         self.pos_embed = nn.Parameter(torch.zeros(1, CONFIG['seq_len'], self.hidden_dim))
 
-        # Bidirectional LSTM processes the sequence of frames
-        # We set hidden_size = hidden_dim // 2 so that since it's bidirectional,
-        # the concatenated output will be exactly hidden_dim to match downstream layers.
+        # LSTM processes the sequence of frames
         self.lstm = nn.LSTM(
             input_size=self.hidden_dim,
-            hidden_size=self.hidden_dim // 2,
-            num_layers=CONFIG['n_layers'],
+            hidden_size=self.hidden_dim,
+            num_layers=CONFIG["n_layers"],
             batch_first=True,
-            bidirectional=True,
-            dropout=0.1 if CONFIG['n_layers'] > 1 else 0.0,
+            bidirectional=False,
+            dropout=0.1 if CONFIG["n_layers"] > 1 else 0.0,
         )
 
         # Policy & Routing Components
@@ -426,15 +424,12 @@ class RoverLSTM(nn.Module):
     def forward_from_features(self, feats):
         """Processes pre-extracted features through the temporal and policy layers."""
         x = self.input_proj(feats)
-        x = x + self.pos_embed[:, :feats.size(1), :]
-        
-        latent_seq, (h_n, c_n) = self.lstm(x) 
-        
-        final_forward = h_n[-2] 
-        final_backward = h_n[-1]
-        
-        final_state = torch.cat([final_forward, final_backward], dim=-1)
-        
+        x = x + self.pos_embed[:, : feats.size(1), :]
+
+        latent_seq, (h_n, c_n) = self.lstm(x)
+
+        final_state = h_n[-1]
+
         return final_state, latent_seq
 
     def forward_sequence(self, images):
@@ -451,7 +446,7 @@ class RoverLSTM(nn.Module):
         x = self.input_proj(feats) 
         x = x + self.pos_embed[:, :S, :]
 
-        # Process with bidirectional LSTM
+        # Process with LSTM
         latent_seq, (h_n, c_n) = self.lstm(x)
 
         return latent_seq, feats
@@ -750,7 +745,7 @@ def train_model(args):
                 writer.writerow(row)
                 
         # Always save the latest model as well
-        torch.save(model.state_dict(), os.path.join(args.save_dir, "latest_jepa_v2.pth"))
+        torch.save(model.state_dict(), os.path.join(args.save_dir, "latest_lstm_v2.pth"))
 
 # ==========================================
 # PART 6: VISUALIZATION (OPEN LOOP + HUD)

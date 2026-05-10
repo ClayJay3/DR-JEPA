@@ -23,7 +23,7 @@ import torchvision.transforms.v2 as v2
 import torchvision.models as models
 import torchvision
 
-from live_inference_test import evaluate_model
+from jepa_live_inference_test import evaluate_model
 
 # ==========================================
 # SYSTEM OPTIMIZATIONS
