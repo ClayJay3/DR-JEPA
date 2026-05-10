@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Architecture Comparison: DR-JEPA vs DR-LSTM</title>
+    <style>
+        :root {
+            /* Missouri S&T Poster Palette */
+            --bg-color: #ffffff;
+            --card-bg: #ffffff;
+            --accent-shared: #004b36;    /* S&T Dark Green */
+            --accent-shared-light: rgba(0, 75, 54, 0.05);
+            --accent-jepa: #d97706;      /* Amber/Gold for Proposed */
+            --accent-lstm: #2563eb;      /* Blue for Baseline */
+            
+            --text-main: #111827;        /* Near Black */
+            --text-sub: #4b5563;         /* Dark Gray */
+            --text-light: #ffffff;
+            
+            --pipe-color: rgba(0, 75, 54, 0.4);
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: 'Arial', 'Inter', sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+            color: var(--accent-shared);
+        }
+
+        h1 { font-size: 2.8rem; margin: 0; font-weight: 800; letter-spacing: -0.02em; }
+        p { font-size: 1.3rem; color: var(--text-sub); margin-top: 8px; }
+
+        .diagram-container {
+            position: relative;
+            width: 95vw; 
+            max-width: 2200px;
+            display: flex;
+            justify-content: space-between;
+            align-items: stretch;
+            padding: 60px 40px 140px 40px;
+            background: transparent;
+        }
+
+        .svg-layer {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            pointer-events: none;
+            z-index: 1;
+        }
+        
+        .path-line { 
+            fill: none; 
+            stroke-width: 4.5; 
+            stroke-linecap: round;
+        }
+        
+        .path-default { stroke: var(--pipe-color); }
+        .path-jepa { stroke: var(--accent-jepa); stroke-dasharray: 10 10; animation: flow 1.5s linear infinite; }
+        .path-lstm { stroke: var(--accent-lstm); }
+
+        @keyframes flow { to { stroke-dashoffset: -20; } }
+
+        .col {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 80px;
+            z-index: 2;
+            width: 340px;
+        }
+
+        .col-split { gap: 140px; }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            border: 3.5px solid var(--accent-shared);
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.08); 
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .card-icon {
+            width: 70px;
+            height: 70px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--accent-shared-light);
+            border: 2px solid rgba(0, 75, 54, 0.15);
+            font-size: 1.8rem;
+        }
+
+        .card-title {
+            font-size: 1.4rem;
+            font-weight: 800;
+            color: var(--accent-shared);
+            margin: 0;
+        }
+
+        .card-desc {
+            font-size: 1rem;
+            color: var(--text-sub);
+            line-height: 1.3;
+            margin: 0;
+        }
+
+        .b-shared { border-color: var(--accent-shared); }
+        
+        .b-jepa { border-color: var(--accent-jepa); }
+        .b-jepa .card-title { color: var(--accent-jepa); }
+        .b-jepa .card-icon { background: rgba(217, 119, 6, 0.05); border-color: rgba(217, 119, 6, 0.2); }
+
+        .b-lstm { border-color: var(--accent-lstm); }
+        .b-lstm .card-title { color: var(--accent-lstm); }
+        .b-lstm .card-icon { background: rgba(37, 99, 235, 0.05); border-color: rgba(37, 99, 235, 0.2); }
+
+        .branch-box {
+            position: relative;
+            padding: 35px 25px 25px 25px;
+            border-radius: 16px;
+            background: #ffffff;
+            border: 2.5px dashed;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            align-items: center;
+        }
+        
+        .branch-jepa { border-color: var(--accent-jepa); background: rgba(217, 119, 6, 0.015); }
+        .branch-lstm { border-color: var(--accent-lstm); background: rgba(37, 99, 235, 0.015); }
+
+        .branch-label {
+            position: absolute;
+            top: -16px;
+            padding: 5px 18px;
+            border-radius: 6px;
+            font-weight: 800;
+            font-size: 1.1rem;
+            color: var(--text-light);
+        }
+
+        .label-jepa { background: var(--accent-jepa); border: 2px solid var(--accent-jepa); }
+        .label-lstm { background: var(--accent-lstm); border: 2px solid var(--accent-lstm); }
+
+        .path-label {
+            position: absolute;
+            background: var(--bg-color);
+            color: var(--accent-shared);
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-weight: 700;
+            font-size: 0.95rem;
+            border: 2px solid var(--accent-shared);
+            transform: translate(-50%, -50%);
+            white-space: nowrap;
+            z-index: 10;
+        }
+        
+        .lbl-jepa { color: var(--accent-jepa); border-color: var(--accent-jepa); }
+        .lbl-lstm { color: var(--accent-lstm); border-color: var(--accent-lstm); }
+
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Model Architecture Comparison</h1>
+        <p>Interchangeable Temporal Cores: DR-JEPA vs DR-LSTM</p>
+    </header>
+
+    <div class="diagram-container" id="diagram">
+        <svg class="svg-layer" id="svg-layer"></svg>
+        <div id="labels-layer"></div>
+
+        <!-- Column 1: Inputs -->
+        <div class="col" style="gap: 220px;">
+            <div class="card b-shared" id="node-cam">
+                <div class="card-icon">📷</div>
+                <h3 class="card-title">Camera Buffer</h3>
+                <p class="card-desc">Rolling history of last 20 frames.</p>
+            </div>
+            
+            <div class="card b-shared" id="node-gps">
+                <div class="card-icon">🧭</div>
+                <h3 class="card-title">GPS Telemetry</h3>
+                <p class="card-desc">Relative distance & heading to goal.</p>
+            </div>
+        </div>
+
+        <!-- Column 2: Shared Vision -->
+        <div class="col">
+            <div class="card b-shared" id="node-vit">
+                <div class="card-icon">👁️</div>
+                <h3 class="card-title">Vision Backbone</h3>
+                <p class="card-desc">DINOv2 ViT-S/14.<br>Extracts spatial embeddings.</p>
+            </div>
+        </div>
+
+        <!-- Column 3: Temporal Cores -->
+        <div class="col col-split" style="width: 420px;">
+            
+            <!-- Proposed (JEPA) -->
+            <div class="branch-box branch-jepa" id="branch-jepa">
+                <div class="branch-label label-jepa">Proposed: DR-JEPA</div>
+                
+                <div class="card b-jepa" id="node-trans" style="width: 100%; box-sizing: border-box;">
+                    <h3 class="card-title">Transformer</h3>
+                    <p class="card-desc">Causal Self-Attention mechanism.</p>
+                </div>
+                
+                <div class="card b-jepa" id="node-ssl" style="width: 100%; box-sizing: border-box; background: rgba(217, 119, 6, 0.04);">
+                    <h3 class="card-title">SSL Predictor</h3>
+                    <p class="card-desc">VICReg latent feature prediction.</p>
+                </div>
+            </div>
+
+            <!-- Baseline (LSTM) -->
+            <div class="branch-box branch-lstm" id="branch-lstm">
+                <div class="branch-label label-lstm">Baseline: DR-LSTM</div>
+                
+                <div class="card b-lstm" id="node-lstm" style="width: 100%; box-sizing: border-box;">
+                    <h3 class="card-title">Bi-LSTM</h3>
+                    <p class="card-desc">Recurrent temporal dependencies.</p>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Column 4: Action Heads -->
+        <div class="col">
+            <div class="card b-shared" id="node-crit">
+                <div class="card-icon">⚠️</div>
+                <h3 class="card-title">Safety Critic</h3>
+                <p class="card-desc">Collision & stuck risk monitoring.</p>
+            </div>
+            
+            <div class="card b-shared" id="node-moe" style="margin-top: 50px;">
+                <div class="card-icon">🧠</div>
+                <h3 class="card-title">MoE Action Planner</h3>
+                <p class="card-desc">Policy experts predict 10-step chunks.</p>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        function renderConnections() {
+            const svg = document.getElementById('svg-layer');
+            const labels = document.getElementById('labels-layer');
+            svg.innerHTML = '';
+            labels.innerHTML = '';
+
+            const parent = document.getElementById('diagram').getBoundingClientRect();
+            const getC = id => {
+                const r = document.getElementById(id).getBoundingClientRect();
+                return {
+                    xL: r.left - parent.left,
+                    xR: r.right - parent.left,
+                    xC: r.left + r.width/2 - parent.left,
+                    yT: r.top - parent.top,
+                    yB: r.bottom - parent.top,
+                    yC: r.top + r.height/2 - parent.top,
+                    w: r.width,
+                    h: r.height
+                };
+            };
+
+            const cam = getC('node-cam');
+            const gps = getC('node-gps');
+            const vit = getC('node-vit');
+            const trans = getC('node-trans');
+            const ssl = getC('node-ssl');
+            const lstm = getC('node-lstm');
+            const crit = getC('node-crit');
+            const moe = getC('node-moe');
+            const bJepa = getC('branch-jepa'); 
+            const bLstm = getC('branch-lstm');
+
+            const addPath = (d, cls) => {
+                const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                p.setAttribute("d", d);
+                p.setAttribute("class", `path-line ${cls}`);
+                svg.appendChild(p);
+            };
+
+            const addLabel = (text, x, y, cls="") => {
+                const l = document.createElement("div");
+                l.className = `path-label ${cls}`;
+                l.innerText = text;
+                l.style.left = x + "px";
+                l.style.top = y + "px";
+                labels.appendChild(l);
+            };
+
+            // 1. Camera -> Vision
+            addPath(`M ${cam.xR} ${cam.yC} C ${cam.xR + 60} ${cam.yC} ${vit.xL - 60} ${vit.yC - 25} ${vit.xL} ${vit.yC - 25}`, 'path-default');
+
+            // 2. Vision -> Transformer (Proposed)
+            addPath(`M ${vit.xR} ${vit.yC - 25} C ${vit.xR + 60} ${vit.yC - 25} ${trans.xL - 60} ${trans.yC} ${trans.xL} ${trans.yC}`, 'path-default');
+            addLabel('Latents', vit.xR + 60, vit.yC - 25);
+
+            // 3. Vision -> LSTM (Baseline)
+            addPath(`M ${vit.xR} ${vit.yC + 25} C ${vit.xR + 80} ${vit.yC + 25} ${lstm.xL - 80} ${lstm.yC} ${lstm.xL} ${lstm.yC}`, 'path-default');
+
+            // 4. Transformer -> SSL Predictor (JEPA internal)
+            addPath(`M ${trans.xC} ${trans.yB} L ${ssl.xC} ${ssl.yT}`, 'path-jepa');
+
+            // 5. Proposed (Transformer) -> Safety Critic
+            addPath(`M ${trans.xR} ${trans.yC - 15} C ${trans.xR + 60} ${trans.yC - 15} ${crit.xL - 60} ${crit.yC - 15} ${crit.xL} ${crit.yC - 15}`, 'path-jepa');
+
+            // 6. Proposed (Transformer) -> MoE Action Planner
+            let routeX_Jepa = bJepa.xR + 50; 
+            addPath(`M ${trans.xR} ${trans.yC + 15} C ${routeX_Jepa} ${trans.yC + 15} ${routeX_Jepa} ${moe.yC - 15} ${moe.xL} ${moe.yC - 15}`, 'path-jepa');
+            addLabel('Belief State', routeX_Jepa, (trans.yC + moe.yC)/2, 'lbl-jepa');
+
+            // 7. Baseline (LSTM) -> Safety Critic
+            let routeX_Lstm = bLstm.xR + 30;
+            addPath(`M ${lstm.xR} ${lstm.yC - 10} C ${routeX_Lstm} ${lstm.yC - 10} ${routeX_Lstm} ${crit.yC + 15} ${crit.xL} ${crit.yC + 15}`, 'path-lstm');
+
+            // 8. Baseline (LSTM) -> MoE Action Planner
+            addPath(`M ${lstm.xR} ${lstm.yC + 15} C ${lstm.xR + 60} ${lstm.yC + 15} ${moe.xL - 60} ${moe.yC + 15} ${moe.xL} ${moe.yC + 15}`, 'path-lstm');
+
+            // 9. Safety Critic -> MoE Action Planner
+            addPath(`M ${crit.xC} ${crit.yB} L ${moe.xC} ${moe.yT}`, 'path-default');
+            addLabel('Danger', crit.xC, (crit.yB + moe.yT)/2);
+
+            // 10. GPS Telemetry -> MoE Action Planner
+            let floorY = parent.height - 60;
+            let cornerRad = 25;
+            let gpsD = `M ${gps.xC} ${gps.yB} ` +
+                       `L ${gps.xC} ${floorY - cornerRad} ` +
+                       `Q ${gps.xC} ${floorY} ${gps.xC + cornerRad} ${floorY} ` +
+                       `L ${moe.xC - 40 - cornerRad} ${floorY} ` +
+                       `Q ${moe.xC - 40} ${floorY} ${moe.xC - 40} ${floorY - cornerRad} ` +
+                       `L ${moe.xC - 40} ${moe.yB}`;
+            
+            addPath(gpsD, 'path-default');
+            addLabel('Context', vit.xC, floorY);
+        }
+
+        window.addEventListener('load', renderConnections);
+        window.addEventListener('resize', renderConnections);
+        setTimeout(renderConnections, 300);
+    </script>
+</body>
+</html>
