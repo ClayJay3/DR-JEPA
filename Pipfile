@@ -4,20 +4,12 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-ultralytics = "*"
-opencv-python = "*"
 torch = "*"
 torchvision = "*"
+opencv-python = "*"
 pandas = "*"
 numpy = "*"
 tqdm = "*"
-bitsandbytes = "*"
-peft = "*"
-matplotlib = "*"
-cdsapi = "*"
-xarray = "*"
-netcdf4 = "*"
-dask = "*"
 
 [dev-packages]
 

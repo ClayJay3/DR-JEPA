@@ -1,66 +1,135 @@
-# DR-JEPAv6: Off-Road Navigation 
+# DR-JEPA v8: Camera + Goal-Vector Rover Navigation
 
-DR-JEPAv6 (Joint-Embedding Predictive Architecture) is an off-road autonomous navigation model. It combines self-supervised learning for vision with a Mixture of Experts (MoE) action policy to predict continuous driving trajectories from a rolling buffer of camera frames and GPS telemetry.
+DR-JEPA drives a rover from a single forward camera and a GPS goal vector.
+It does not mimic actions: it **understands the world it drives in**. A
+JEPA-trained perception network converts every camera frame into metric
+occupancy evidence, which is fused into a **persistent world map** — the
+rover's ever-growing spatial memory for the whole run — and a planner
+navigates on that learned map.
 
-## Architecture Overview
+## Architecture
 
-*(Note: Download and open `DR-JEPAV6_ARCH.html` in your browser for the full interactive architecture diagram!)*
-
-The model pipeline is split into a Training Phase and an Inference Phase, utilizing the following core components:
-
-* **Vision Backbone (DINOv2):** A ViT-S/14 model that processes a 20-frame rolling buffer of images to extract spatial features (384 dimensions).
-* **Temporal State Estimator:** A 4-layer Causal Transformer Encoder that aggregates the history of features into a 512-dimensional latent belief state.
-* **JEPA Predictor (Training Only):** A self-supervised head that learns the environment's dynamics by predicting target DINOv2 features 3 steps into the future, optimized via a robust VICReg loss.
-* **Safety Critic:** A binary classifier that monitors the latent state to predict the probability of the rover getting stuck or facing danger.
-* **Action Policy (MoE):** A Mixture of Experts router that fuses the latent state, GPS context, and danger signal. It selects between 3 experts to predict a 10-step future action chunk (throttle and steering) with a temporal jerk penalty.
-
-## Environment Setup
-
-This project uses `pipenv` for dependency management. Ensure you have Python installed, then set up the environment:
-
-1. Install pipenv if you haven't already:
-   ```bash
-   pip install pipenv
-   ```
-2. Install the project dependencies from the `Pipfile`:
-   ```bash
-   pipenv install
-   ```
-3. Activate the virtual environment:
-   ```bash
-   pipenv shell
-   ```
-
-## Usage & Example Commands
-
-Below are the core commands to generate data, preprocess it, train the model, and run inferences.
-
-### 1. Data Generation
-Generate synthetic driving data and telemetry to test the pipeline:
-```bash
-python generate_synth_data.py
+```
+                        camera frame (224x224)
+                              |
+             frozen DINOv2 ViT-S/14  ->  12x12 + CLS tokens
+                              |
+        +---------------------+----------------------+
+        |                                            |
+  MapDecoder (CNN)                            FrameEncoder (MLP)
+  per-frame occupancy WEDGE                   256-d embedding e_t --- EMA
+  (24m x 24m ahead, 0.5 m cells)                     |                 |
+  + per-cell visibility confidence            causal Transformer   target
+        |                                            |            ~e_{t+k}
+        v                                     belief state s_t        ^
+  Bayesian log-odds fusion                     |-- DangerHead         |
+  into a WORLD-ANCHORED MAP                    |-- PolicyHead (BC)    |
+  (256m x 256m, grows by re-centering,         |-- JEPAPredictor -----+
+   permanent for the whole run)                    (action-conditioned
+        |                                           world model)
+        v
+  A* route on the learned costmap  ->  arc-sampling local controller
+  (replans continuously)               + zero-lag near-field guard
+                                       + reverse/escape recovery
 ```
 
-### 2. Preprocessing
-Pack raw video (`.mp4`/`.avi`) and telemetry (`.csv`) files into an efficient, memory-mapped binary JPEG format for high-speed training:
+* **Temporal memory**: the log-odds map never forgets — obstacles seen once
+  stay known after leaving the camera view (that is what eliminates
+  circling and re-exploration). Unbounded run length at O(1) cost per step.
+* **JEPA**: trains the shared representation (action-conditioned future-
+  embedding prediction with an EMA target encoder + VICReg anti-collapse);
+  the danger head rides on the belief state as a speed governor. A pure
+  behavior-cloned pilot (`--pilot bc`) is kept as a baseline.
+* **Supervision**: the occupancy wedge is trained against exact geometry
+  from the simulator with **occlusion-aware raycast visibility masks** —
+  the net is never asked to hallucinate what the camera cannot see. This is
+  privileged supervision at training time only; at inference the model sees
+  pixels and noisy GPS/compass, nothing else.
+* **Perception-driven navigation**: the planner is the same A* + arc
+  recipe as the privileged expert that generates the data — but running on
+  the *learned* map. Navigation quality therefore tracks perception
+  quality, instead of compounding like behavior cloning.
+* ~7M trainable parameters + frozen DINOv2. **10 ms per control step**
+  (99 Hz) on an RTX 4080 — 10x real-time at the 10 Hz control rate.
+
+## Results (closed-loop, held-out seed block, 30 unseen worlds)
+
+| policy                             | success | SPL   | contact events/ep |
+|------------------------------------|--------:|------:|------------------:|
+| privileged expert (true obstacle map) | 96.7% | 0.94 |              0.23 |
+| **DR-JEPA v8 (camera + goal only)**   | **100%** | **0.88** |          2.1  |
+| v7 behavior-cloning pilot (reference) | 62.5%*  | 0.44* |             6.5*  |
+
+\* measured on the tuning seed block; the BC pilot was the previous
+architecture's best result.
+
+Endless mode: 11 consecutive goals in one continuous 5-minute run with a
+single persistent map (`live_inference_test.py`). An oracle-perception
+ablation (ground-truth wedges through the same fusion/planning stack)
+scores 95-100%, confirming perception is the remaining gap; occupancy
+AUC is 0.914.
+
+## Synthetic data (sim-to-real oriented)
+
+`generate_synth_data.py` renders domain-randomized worlds: heightfield
+terrain with camera pitch/roll, randomized sun/sky/palettes/fog, irregular
+shaded rock/tree/bush meshes, ground clutter, motion blur / exposure /
+vignette / sensor noise, actuation latency, steering lag, wheel slip,
+contact physics with tangential sliding. Logs contain only what a real
+rover would have: noisy GPS, compass, odometry — plus training-only ground
+truth (true pose, occupancy wedges, expert action labels from an A* + arc
+planner). `--scenario wall` forces a scenario; `--dagger ckpt` runs a
+DAgger round for the BC head.
+
+## Setup
+
 ```bash
-python DR-JEPA6.py preprocess --data_dir /path/to/raw_data --output /path/to/packed_dataset
+python3.12 -m venv .venv
+.venv/bin/pip install torch torchvision opencv-python pandas numpy tqdm
+source .venv/bin/activate        # or use pipenv install
 ```
 
-### 3. Training
-Train the JEPA model using the packed binary dataset. The script automatically handles DINOv2 freezing/unfreezing, loss weighting, and early stopping.
+## Pipeline
+
 ```bash
-python DR-JEPA6.py train --dataset /path/to/packed_dataset --save_dir runs/
+# 1. generate episodes (video + telemetry CSV + wedge ground truth)
+python generate_synth_data.py --episodes 400 --output data_v8
+python generate_synth_data.py --episodes 150 --output data_v8_wall --scenario wall --seed 50000
+
+# 2. pack: one frozen-DINOv2 pass per frame, features + wedge targets to memmaps
+python drjepa.py preprocess --data_dir data_v8,data_v8_wall --output packed
+
+# 3. train (~20 min)
+python drjepa.py train --dataset packed --save_dir runs
+
+# 4. closed-loop evaluation (records show the live map + planned route)
+python drjepa.py eval --policy model --pilot map --checkpoint runs/best.pth --episodes 40 --record 4
+python drjepa.py eval --policy expert --episodes 40        # privileged baseline
+python drjepa.py eval --policy model --pilot bc ...        # BC ablation
+
+# 5. endless live demo (persistent map across goals)
+python live_inference_test.py --checkpoint runs/best.pth
+
+# 6. open-loop HUD over a recorded episode
+python drjepa.py viz --video data_v8/<episode>.mp4 --checkpoint runs/best.pth
 ```
 
-### 4. Visualization (Open Loop)
-Run deterministic open-loop visualization over a specific video, rendering a Heads-Up Display (HUD) showing ground truth vs. model predictions and active MoE experts.
-```bash
-python DR-JEPA6.py viz --video /path/to/video.mp4 --checkpoint runs/best_jepa_v2.pth
-```
+Real rover data drops into the same pipeline: (video, CSV) pairs with the
+same telemetry columns train the JEPA/policy/danger heads directly; the
+occupancy head additionally needs wedge ground truth (from lidar/stereo or
+sim pretraining — the perception net transfers via the frozen DINOv2
+features).
 
-### 5. Live Inference
-Test the model's closed-loop real-time capabilities:
-```bash
-python live_inference_test.py
+## Repository layout
+
+```
+drjepa/config.py     every hyperparameter (sim, model, training)
+drjepa/simulator.py  domain-randomized world, physics, sensors, wedge GT
+drjepa/expert.py     privileged A* + arc-sampling demonstration expert
+drjepa/model.py      RoverJEPA: MapDecoder, JEPA world model, heads
+drjepa/dataset.py    feature/wedge packing + training dataset
+drjepa/pilot.py      MapPilot (map+plan navigator), BC Pilot, HUD
+drjepa.py            CLI: preprocess / train / eval / viz
+generate_synth_data.py  episode generator (+ --scenario, --dagger)
+live_inference_test.py  endless closed-loop demo
 ```

@@ -208,3 +208,16 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# DR-JEPA generated artifacts
+data_synth*/
+data_wall*/
+data_dagger*/
+data_v8*/
+packed*/
+runs/
+eval_out*/
+eval_v*/
+eval_final/
+live_run.mp4
+*_viz.mp4

@@ -1,5 +1,10 @@
-python DR-JEPA6.py preprocess --data_dir data_synthetic_unicycle --output packed_dataset
-python DR-JEPA6.py train --dataset packed_dataset --epochs 100 --save_dir runs
-python DR-JEPA6.py viz --video data_synthetic_unicycle/crash_recovery_5.mp4 --checkpoint runs/best_jepa_v2.pth
-
-python deploy_live_rover.py --checkpoint runs/best_jepa_v2.pth
+python generate_synth_data.py --episodes 400 --output data_v8
+python generate_synth_data.py --episodes 150 --output data_v8_wall --scenario wall --seed 50000
+python drjepa.py preprocess --data_dir data_v8,data_v8_wall --output packed
+python drjepa.py train --dataset packed --save_dir runs
+python drjepa.py eval --policy expert --episodes 40 --record 3
+python drjepa.py eval --policy model --pilot map --checkpoint runs/best.pth --episodes 40 --record 3
+python drjepa.py eval --policy model --pilot bc --checkpoint runs/best.pth --episodes 40
+python drjepa.py viz --video data_v8/open_normal_00011.mp4 --checkpoint runs/best.pth
+python live_inference_test.py --checkpoint runs/best.pth
+python live_inference_test.py --checkpoint runs/best.pth --headless --frames 3000
