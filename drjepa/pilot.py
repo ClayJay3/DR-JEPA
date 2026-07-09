@@ -228,6 +228,8 @@ class MapPilot:
         self.escape = 0
         self._last_pos = None
         self._stuck_frames = 0
+        self.last_arc = None
+        self.last_danger = 0.0
         # multi-frame perception history: (tokens, (speed, steer)) per step
         m_off = max(self.cfg.model.frame_offsets)
         self._tok_hist = collections.deque(maxlen=m_off + 1)
@@ -366,6 +368,8 @@ class MapPilot:
         evidence = np.where(evidence > 0, evidence * self.POS_EVIDENCE_SCALE,
                             evidence)
         upd = np.clip(evidence, -4.0, 4.0) * conf * 0.55
+        self.last_evidence = evidence          # for visualization
+        self.last_conf = conf
 
         def cells():
             wx = self.pose[0] + self._wx * cy + self._wz * sy
@@ -617,6 +621,7 @@ class MapPilot:
         score[~feasible] = -1e9
         best = int(np.argmax(score))
         steer = float(steers[best])
+        self.last_arc = pts[best]              # for visualization
 
         v_clear = np.clip(clear[best] / 3.5, 0.35, 1.0)
         v_turn = 1.0 - 0.4 * abs(steer)

@@ -238,6 +238,45 @@ def evaluate(args):
 
 
 # ==========================================================================
+# FSD-STYLE CINEMATIC VISUALIZATION
+# ==========================================================================
+def fsd(args):
+    import cv2
+    from drjepa.simulator import RoverSim, SimConfig
+    from drjepa.pilot import MapPilot
+    from drjepa.fsdviz import FSDRenderer
+
+    pilot = MapPilot(args.checkpoint, device=device.type)
+    sim = RoverSim(SimConfig(), scenario=args.scenario, seed=args.seed)
+    renderer = FSDRenderer(pilot, size=(args.width, args.height))
+    writer = cv2.VideoWriter(args.out, cv2.VideoWriter_fourcc(*"mp4v"),
+                             10.0 * FSDRenderer.TWEENS,
+                             (args.width, args.height))
+    print(f"Rendering {args.frames} control steps -> {args.out} "
+          f"({10 * FSDRenderer.TWEENS} fps)")
+    goals = 0
+    for n in range(args.frames):
+        frame = sim.render()
+        out = pilot.step(frame, sim.sensor_readout())
+        for f in renderer.step(frame, sim.sensor_readout(), out):
+            writer.write(f)
+            if args.show:
+                cv2.imshow("DR-JEPA FSD view", f)
+                if cv2.waitKey(1) == ord("q"):
+                    writer.release()
+                    return
+        info = sim.step(out["throttle"], out["steer"])
+        if info["reached"] or info["timeout"]:
+            goals += info["reached"]
+            print(f"  [{n:4d}] {'goal reached' if info['reached'] else 'timeout'}"
+                  f" (total goals {goals})")
+            sim.respawn_goal()
+    writer.release()
+    cv2.destroyAllWindows()
+    print(f"Done: {goals} goals, video at {args.out}")
+
+
+# ==========================================================================
 # OPEN-LOOP VIZ
 # ==========================================================================
 def visualize(args):
@@ -306,6 +345,17 @@ if __name__ == "__main__":
     p.add_argument("--no_vo", action="store_true",
                    help="disable visual-odometry map alignment")
 
+    p = sub.add_parser("fsd", help="cinematic belief-world visualization")
+    p.add_argument("--checkpoint", default="runs/best.pth")
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--scenario", default=None,
+                   choices=[None, "open", "dense", "wall", "boulders"])
+    p.add_argument("--frames", type=int, default=600, help="control steps")
+    p.add_argument("--out", default="fsd_demo.mp4")
+    p.add_argument("--width", type=int, default=1280)
+    p.add_argument("--height", type=int, default=720)
+    p.add_argument("--show", action="store_true")
+
     p = sub.add_parser("viz", help="open-loop HUD over a recorded episode")
     p.add_argument("--video", required=True)
     p.add_argument("--checkpoint", default="runs/best.pth")
@@ -320,5 +370,7 @@ if __name__ == "__main__":
         train(args)
     elif args.mode == "eval":
         evaluate(args)
+    elif args.mode == "fsd":
+        fsd(args)
     elif args.mode == "viz":
         visualize(args)
