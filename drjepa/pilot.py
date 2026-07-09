@@ -868,7 +868,13 @@ class MapPilot:
 
     # ---------------- introspection ----------------
     def map_view(self, size=112, span_m=40.0):
-        """BGR image of the believed occupancy around the rover (for HUD)."""
+        """BGR image of the believed occupancy around the rover (for HUD).
+
+        Layers, back to front: unknown grey, JEPA ghost predictions for
+        unseen space (violet = predicted obstacle/hazard, light grey =
+        predicted open -- same convention as fsd_viz), observed free/occ,
+        then path/rover/goal markers.
+        """
         c = int(span_m / self.res)
         ci = int((self.pose[0] - self.map_corner[0]) / self.res)
         cj = int((self.pose[1] - self.map_corner[1]) / self.res)
@@ -877,6 +883,35 @@ class MapPilot:
         prob = 1.0 / (1.0 + np.exp(-crop))
         img = np.full((*prob.shape, 3), 128, np.uint8)     # unknown = grey
         known = np.abs(crop) > 0.4
+
+        # --- JEPA ghost layer: predicted content of UNSEEN cells ---
+        # Computed for the HUD even when the planner is not consuming
+        # predictions (mirrors fsd_viz). Cached per control step, so this
+        # adds at most one completer forward per step while recording.
+        if getattr(getattr(self, "model", None), "map_completer", None) is not None:
+            pred = self._complete_map()
+            if pred is not None:
+                Gp = pred.shape[1]
+                pres = self.cfg.model.comp_res
+                # world position of each crop cell -> completer grid index
+                xs = self.map_corner[0] + (i0 + np.arange(crop.shape[0]) + 0.5) * self.res
+                zs = self.map_corner[1] + (j0 + np.arange(crop.shape[1]) + 0.5) * self.res
+                pi = np.floor((xs - self.pred_origin[0]) / pres).astype(int)
+                pj = np.floor((zs - self.pred_origin[1]) / pres).astype(int)
+                valid = ((pi >= 0) & (pi < Gp))[:, None] & \
+                        ((pj >= 0) & (pj < Gp))[None, :]
+                pi = np.clip(pi, 0, Gp - 1)
+                pj = np.clip(pj, 0, Gp - 1)
+                blocked = np.maximum(pred[0], pred[1])[np.ix_(pi, pj)]
+                unobs = valid & ~known & \
+                    (self.pred_observed[np.ix_(pi, pj)] < 0.5)
+                img[unobs & (blocked < 0.25)] = (150, 150, 150)
+                occ_g = unobs & (blocked > 0.45)
+                a = (0.55 + 0.45 * np.clip((blocked[occ_g] - 0.45) / 0.4,
+                                           0, 1))[:, None]
+                img[occ_g] = ((1 - a) * img[occ_g] +
+                              a * np.array((200, 90, 170))).astype(np.uint8)
+
         img[known & (prob <= 0.5)] = (230, 230, 230)       # free = white
         occ_v = (np.clip(prob, 0.5, 1.0) - 0.5) * 2
         occ_mask = known & (prob > 0.5)
