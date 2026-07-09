@@ -136,7 +136,7 @@ python live_inference_test.py --checkpoint runs/best.pth
 # 5b. cinematic FSD-style visualization of the belief world (30 fps video):
 #     obstacles, route ribbon, goal beacon, neural wedge, memory map -- all
 #     rendered from what the MODEL believes, never from ground truth
-python drjepa.py fsd --checkpoint runs/best.pth --frames 900 --out fsd_demo.mp4
+python fsd_viz.py --checkpoint runs/best.pth --frames 900 --output_video fsd_demo.mp4
 
 # 6. open-loop HUD over a recorded episode
 python drjepa.py viz --video data_v9/<episode>.mp4 --checkpoint runs/best.pth
@@ -160,4 +160,5 @@ drjepa/pilot.py      MapPilot (map+plan navigator), BC Pilot, HUD
 drjepa.py            CLI: preprocess / train / eval / viz
 generate_synth_data.py  episode generator (+ --scenario, --dagger)
 live_inference_test.py  endless closed-loop demo
+fsd_viz.py           cinematic FSD-style belief-world visualization
 ```

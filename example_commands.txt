@@ -8,5 +8,5 @@ python drjepa.py eval --policy model --pilot bc --checkpoint runs/best.pth --epi
 python drjepa.py viz --video data_v9/open_normal_00011.mp4 --checkpoint runs/best.pth
 python live_inference_test.py --checkpoint runs/best.pth
 python live_inference_test.py --checkpoint runs/best.pth --headless --frames 3000
-python drjepa.py fsd --checkpoint runs/best.pth --frames 900 --out fsd_demo.mp4
-python drjepa.py fsd --checkpoint runs/best.pth --scenario wall --seed 1029 --frames 500 --out fsd_wall.mp4 --show
+python fsd_viz.py --checkpoint runs/best.pth --frames 900 --output_video fsd_demo.mp4
+python fsd_viz.py --checkpoint runs/best.pth --scenario wall --seed 1029 --frames 500 --output_video fsd_wall.mp4 --show
