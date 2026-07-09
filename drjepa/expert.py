@@ -22,12 +22,16 @@ class GridPlanner:
 
     RES = 1.5  # metres per cell
 
-    def __init__(self, obs_xz, obs_rad, inflate, start, goal, margin=45.0):
-        """Rasterize the (inflated) obstacles into a grid and plan once.
+    def __init__(self, obs_xz, obs_rad, inflate, start, goal, margin=45.0,
+                 terrain=None, sim_cfg=None):
+        """Rasterize obstacles AND terrain hazards into a cost grid, plan once.
 
         `inflate` is added to every obstacle radius so the path keeps
         rover-radius clearance; `margin` pads the grid bounds beyond the
         start/goal bounding box so routes can swing around wide walls.
+        When `terrain` is given, steep grades become lethal cells and
+        moderate slopes / sand raise traversal cost, so routes go around
+        washes and over saddles the way a human driver would.
         """
         self.goal = np.asarray(goal, float)
         lo = np.minimum(start, goal) - margin
@@ -37,6 +41,7 @@ class GridPlanner:
         self.nx = int((hi[0] - lo[0]) / self.RES) + 1
         self.nz = int((hi[1] - lo[1]) / self.RES) + 1
         self._obs_xz, self._obs_rad = obs_xz, obs_rad
+        self._terrain, self._sim_cfg = terrain, sim_cfg
         self.inflate = inflate
         self.occ = self._build_occ(inflate)
         self.path = None
@@ -44,7 +49,7 @@ class GridPlanner:
         self.replan(start)
 
     def _build_occ(self, inflate):
-        """Occupancy grid: cells within `inflate` of any obstacle surface."""
+        """Lethal-cell grid (obstacles + steep terrain) and the cost grid."""
         occ = np.zeros((self.nx, self.nz), bool)
         obs_xz, obs_rad, lo, hi = self._obs_xz, self._obs_rad, self.lo, self.hi
         if len(obs_rad):
@@ -63,6 +68,20 @@ class GridPlanner:
                 dx = xs[i0:i1, None] - ox
                 dz = zs[None, j0:j1] - oz
                 occ[i0:i1, j0:j1] |= (dx * dx + dz * dz) < r * r
+
+        self.cost = np.ones((self.nx, self.nz), np.float32)
+        if self._terrain is not None:
+            xs = lo[0] + (np.arange(self.nx) + 0.5) * self.RES
+            zs = lo[1] + (np.arange(self.nz) + 0.5) * self.RES
+            X, Z = np.meshgrid(xs, zs, indexing="ij")
+            grade = self._terrain.grade(X.ravel(), Z.ravel()).reshape(occ.shape)
+            sand = self._terrain.sand(X.ravel(), Z.ravel()).reshape(occ.shape)
+            gb = self._sim_cfg.grade_block
+            gd = self._sim_cfg.grade_drive
+            occ |= grade > gb * 0.95
+            # soft costs: prefer flat, firm ground when it barely detours
+            self.cost += 4.0 * np.clip((grade - gd) / (gb - gd), 0, 1)
+            self.cost += 3.0 * sand
         return occ
 
     # ---------------- helpers ----------------
@@ -123,7 +142,7 @@ class GridPlanner:
                 i, j = cur[0] + di, cur[1] + dj
                 if not (0 <= i < nx and 0 <= j < nz) or occ[i, j]:
                     continue
-                ng = gc + w
+                ng = gc + w * float(self.cost[i, j])
                 nb = (i, j)
                 if ng < gscore.get(nb, 1e18):
                     gscore[nb] = ng
@@ -193,7 +212,8 @@ class ArcPlanner:
         self.n_steps = int(self.HORIZON_S / self.ARC_DT)
         self.grid = GridPlanner(sim.obs_xz, sim.obs_rad,
                                 sim.cfg.rover_radius + 0.45,
-                                (sim.x, sim.z), (sim.goal_x, sim.goal_z))
+                                (sim.x, sim.z), (sim.goal_x, sim.goal_z),
+                                terrain=sim.terrain, sim_cfg=sim.cfg)
         self._since_replan = 0
 
     # ------------------------------------------------------------------
@@ -262,6 +282,24 @@ class ArcPlanner:
         self.caution = max(0, self.caution - 1)
         feasible = clear > margin
 
+        # terrain feasibility: reject arcs that climb/descend beyond the
+        # drivable grade or cross side-slopes near the tip limit
+        h = sim.terrain.height(pts[..., 0].ravel(),
+                               pts[..., 1].ravel()).reshape(pts.shape[:2])
+        h0 = sim.terrain.height(sim.x, sim.z)
+        seg_len = speed_plan * self.ARC_DT
+        dh = np.diff(np.concatenate([np.full((len(h), 1), h0), h], axis=1),
+                     axis=1)
+        pitch = np.abs(dh) / max(seg_len, 1e-6)
+        grades = sim.terrain.grade(pts[..., 0].ravel(),
+                                   pts[..., 1].ravel()).reshape(pts.shape[:2])
+        terrain_ok = ((pitch.max(axis=1) < sim.cfg.grade_block * 0.85) &
+                      (grades.max(axis=1) < sim.cfg.tip_roll * 0.95))
+        feasible &= terrain_ok
+        # steep arcs also read as "low clearance" so recovery direction
+        # choice and scoring prefer gentle ground
+        clear = np.where(terrain_ok, clear, np.minimum(clear, 0.0))
+
         if blocked_contact or not feasible.any():
             # choose reverse turn direction toward the more open side
             left = clear[: self.N_ARCS // 2].max()
@@ -294,11 +332,16 @@ class ArcPlanner:
         best = int(np.argmax(score))
         steer = float(self.steers[best])
 
-        # --- throttle: clearance-, curvature- and goal-aware ---
+        # --- throttle: clearance-, curvature-, terrain- and goal-aware ---
         v_clear = np.clip(clear[best] / 3.5, 0.50, 1.0)
         v_turn = 1.0 - 0.40 * abs(steer)
         v_goal = np.clip(gd / 8.0, 0.30, 1.0)
-        throttle = float(np.clip(min(v_clear, v_turn, v_goal), 0.25, 1.0))
+        # slow down on the rough stuff ahead (sand + slope along chosen arc)
+        sand_ahead = float(sim.terrain.sand(pts[best, :4, 0],
+                                            pts[best, :4, 1]).max())
+        v_terr = 1.0 - 0.45 * sand_ahead - 0.8 * float(pitch[best, :4].max())
+        throttle = float(np.clip(min(v_clear, v_turn, v_goal, v_terr),
+                                 0.25, 1.0))
 
         self.prev_steer = steer
         return throttle, steer

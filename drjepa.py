@@ -95,13 +95,11 @@ def train(args):
         t0 = time.time()
         agg = {}
         for batch in train_loader:
-            tokens, label, execu, ctx, danger, dist, occ, vis, motion = [
-                b.to(device, non_blocking=True) for b in batch]
+            batch = {k: v.to(device, non_blocking=True)
+                     for k, v in batch.items()}
             opt.zero_grad(set_to_none=True)
             with amp:
-                loss, parts = model.compute_losses(tokens, label, execu, ctx,
-                                                   danger, dist, occ, vis,
-                                                   motion, tc)
+                loss, parts = model.compute_losses(batch, tc)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
@@ -117,24 +115,24 @@ def train(args):
         agg = {}
         with torch.no_grad():
             for batch in val_loader:
-                tokens, label, execu, ctx, danger, dist, occ, vis, motion = [
-                    b.to(device) for b in batch]
+                batch = {k: v.to(device) for k, v in batch.items()}
                 with amp:
-                    _, parts = model.compute_losses(tokens, label, execu, ctx,
-                                                    danger, dist, occ, vis,
-                                                    motion, tc)
+                    _, parts = model.compute_losses(batch, tc)
                 for k, v in parts.items():
                     agg[k] = agg.get(k, 0.0) + v
         va = {k: v / max(1, len(val_loader)) for k, v in agg.items()}
-        # mapping quality is what drives navigation; the BC heads overfit
-        # earlier and must not veto a better perception checkpoint
-        score = va["map"]
+        # perception quality is what drives navigation; the BC heads overfit
+        # earlier and must not veto a better perception checkpoint. All four
+        # driving-relevant perception losses vote (wedge + completion).
+        score = va["map"] + 0.5 * va["elev"] + 0.25 * va["sand"] + \
+            0.5 * va["comp"]
 
         print(f"ep {epoch + 1:3d}/{tc.epochs} [{time.time() - t0:5.1f}s] "
-              f"train act {tr['act']:.3f} map {tr['map']:.3f} | "
-              f"val act {va['act']:.3f} map {va['map']:.3f} "
-              f"IoU {va['iou']:.3f} safe {va['safe']:.3f} "
-              f"jepa {va['jepa']:.3f} | score {score:.4f}"
+              f"train map {tr['map']:.3f} comp {tr['comp']:.3f} | "
+              f"val map {va['map']:.3f} IoU {va['iou']:.3f} "
+              f"elev {va['elev']:.3f} sand {va['sand']:.3f} "
+              f"comp {va['comp']:.3f} cIoU {va['ciou']:.3f} "
+              f"act {va['act']:.2f} | score {score:.4f}"
               + ("  *best*" if score < best_score else ""))
 
         ckpt = {"model": model.state_dict(), "config": cfg.to_dict(),
@@ -173,7 +171,7 @@ def evaluate(args):
     if args.policy == "model":
         if args.pilot == "map":
             pilot = MapPilot(args.checkpoint, device=device.type,
-                             vo=not args.no_vo)
+                             vo=not args.no_vo, complete=args.complete)
         else:
             pilot = Pilot(args.checkpoint, device=device.type,
                           shield=not args.no_shield)
@@ -218,6 +216,9 @@ def evaluate(args):
                 writer.write(hud)
             info = sim.step(thr, st)
             min_clear = min(min_clear, info["clearance"])
+            if info["tipped"]:
+                status = "tipped"
+                break
             if info["reached"]:
                 status = "reached"
                 break
@@ -229,6 +230,7 @@ def evaluate(args):
         results.append({"seed": seed, "scenario": sim.scenario,
                         "spawn": sim.spawn_mode, "status": status,
                         "frames": sim.frame, "collisions": sim.collision_count,
+                        "stalls": sim.terrain_stalls,
                         "spl": spl, "min_clearance": round(min_clear, 2),
                         "goal_dist": round(d0, 1)})
         r = results[-1]
@@ -238,22 +240,30 @@ def evaluate(args):
 
     n = len(results)
     succ = sum(r["status"] == "reached" for r in results) / n
+    tipped = sum(r["status"] == "tipped" for r in results) / n
     coll_free = sum(r["collisions"] == 0 for r in results) / n
     tot_coll = sum(r["collisions"] for r in results)
+    tot_stall = sum(r["stalls"] for r in results)
     spl = np.mean([r["spl"] for r in results])
+    label = args.policy
+    if args.policy == "model" and args.pilot == "map":
+        label += (" +vo" if not args.no_vo else " -vo")
+        label += (" +complete" if args.complete else " -complete")
     print("\n================ CLOSED-LOOP RESULTS ================")
-    print(f" policy            : {args.policy}"
-          + ("" if args.policy == "expert" else
-             f" (shield {'off' if args.no_shield else 'on'})"))
+    print(f" policy            : {label}")
     print(f" episodes          : {n}")
     print(f" success rate      : {succ * 100:.1f}%")
+    print(f" tipped episodes   : {tipped * 100:.1f}%")
     print(f" collision-free eps: {coll_free * 100:.1f}%")
     print(f" contact events/ep : {tot_coll / n:.2f}")
+    print(f" terrain stalls/ep : {tot_stall / n:.2f}")
     print(f" SPL               : {spl:.3f}")
     out_path = os.path.join(args.record_dir, f"results_{args.policy}.json")
     with open(out_path, "w") as f:
-        json.dump({"summary": {"success": succ, "collision_free": coll_free,
-                               "contacts_per_ep": tot_coll / n, "spl": spl},
+        json.dump({"summary": {"success": succ, "tipped": tipped,
+                               "collision_free": coll_free,
+                               "contacts_per_ep": tot_coll / n,
+                               "stalls_per_ep": tot_stall / n, "spl": spl},
                    "episodes": results}, f, indent=2)
     print(f" saved -> {out_path}")
 
@@ -328,6 +338,10 @@ if __name__ == "__main__":
     p.add_argument("--no_shield", action="store_true")
     p.add_argument("--no_vo", action="store_true",
                    help="disable visual-odometry map alignment")
+    p.add_argument("--complete", action="store_true",
+                   help="let map-space JEPA predictions bias planner costs "
+                        "for unobserved cells (measured neutral-to-negative "
+                        "in sim; see README)")
 
     p = sub.add_parser("viz", help="open-loop HUD over a recorded episode")
     p.add_argument("--video", required=True)

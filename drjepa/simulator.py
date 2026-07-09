@@ -43,14 +43,22 @@ def latlon_to_meters(lat, lon, origin_lat, origin_lon):
 
 
 def wedge_ground_truth(sim, cells=48, res=0.5, fov_deg=None):
-    """Ground-truth occupancy + visibility of the wedge ahead of the rover.
+    """Ground-truth perception targets for the wedge ahead of the rover.
 
-    Returns (occ, vis) boolean arrays of shape (cells, cells) in the rover
-    frame: index [i, j] covers x_right = (i+0.5)*res - cells*res/2,
-    z_forward = (j+0.5)*res. Visibility is an occlusion-aware raycast: cells
-    behind the first obstacle along a camera ray (or outside the FOV) are
-    marked invisible, so the perception net is never asked to hallucinate
-    what the camera cannot see. Used only at data-generation time.
+    Returns (occ, vis, elev, sand) arrays of shape (cells, cells) in the
+    rover frame: index [i, j] covers x_right = (i+0.5)*res - cells*res/2,
+    z_forward = (j+0.5)*res.
+
+      occ  : bool, obstacle footprint (rocks/trees/bushes)
+      vis  : bool, occlusion-aware visibility (viewshed: cells hidden behind
+             obstacles OR terrain ridges/gully lips are marked invisible)
+      elev : float, terrain height relative to the rover's ground (m)
+      sand : float in [0, 1], soft-ground intensity
+
+    The viewshed uses the classic max-elevation-angle sweep: marching out
+    along each camera ray, a cell is visible only while its elevation angle
+    from the camera exceeds every angle seen before it. Used only at
+    data-generation time.
     """
     fov = math.radians(fov_deg if fov_deg is not None else sim.cfg.fov_deg)
     half = cells * res / 2.0
@@ -62,6 +70,12 @@ def wedge_ground_truth(sim, cells=48, res=0.5, fov_deg=None):
     WX = sim.x + X * cy + Z * sy
     WZ = sim.z - X * sy + Z * cy
 
+    h0 = float(sim.terrain.height(sim.x, sim.z))
+    elev = (sim.terrain.height(WX.ravel(), WZ.ravel())
+            .reshape(cells, cells).astype(np.float32) - h0)
+    sand = (sim.terrain.sand(WX.ravel(), WZ.ravel())
+            .reshape(cells, cells).astype(np.float32))
+
     occ = np.zeros((cells, cells), bool)
     if len(sim.obs_rad):
         reach = cells * res * 1.5
@@ -70,23 +84,68 @@ def wedge_ground_truth(sim, cells=48, res=0.5, fov_deg=None):
         for (ox, oz), r in zip(sim.obs_xz[near], sim.obs_rad[near]):
             occ |= (WX - ox) ** 2 + (WZ - oz) ** 2 < r * r
 
-    # raycast visibility in the rover frame
+    # viewshed visibility: terrain AND obstacles occlude
     vis = np.zeros((cells, cells), bool)
+    cam_y = h0 + sim.cfg.cam_height
     n_rays = 3 * cells
     angs = np.linspace(-fov / 2, fov / 2, n_rays)
     rs = np.arange(res / 2, cells * res, res / 2)
     px = np.sin(angs)[:, None] * rs[None, :]          # (rays, steps)
     pz = np.cos(angs)[:, None] * rs[None, :]
+    rwx = sim.x + px * cy + pz * sy                   # ray points, world
+    rwz = sim.z - px * sy + pz * cy
+    rh = sim.terrain.height(rwx.ravel(), rwz.ravel()).reshape(px.shape)
     ii = np.floor((px + half) / res).astype(int)
     jj = np.floor(pz / res).astype(int)
     inside = (ii >= 0) & (ii < cells) & (jj >= 0) & (jj < cells)
     ii, jj = np.clip(ii, 0, cells - 1), np.clip(jj, 0, cells - 1)
+    # elevation angle of the ground point (tan): terrain occlusion
+    tan_ang = (rh - cam_y) / rs[None, :]
+    max_seen = np.maximum.accumulate(tan_ang, axis=1)
+    terrain_ok = tan_ang >= max_seen - 1e-6
+    # obstacle occlusion: first occupied cell along a ray blocks the rest
     hit = occ[ii, jj] & inside
-    # first hit blocks everything past it (the hit cell itself is visible)
     blocked = np.cumsum(hit, axis=1) - hit.astype(int) > 0
-    ok = inside & ~blocked
+    ok = inside & ~blocked & terrain_ok
     vis[ii[ok], jj[ok]] = True
-    return occ, vis
+    return occ, vis, elev, sand
+
+
+def episode_gt_grids(sim, res=1.0, margin=45.0):
+    """World-frame ground-truth grids for map-completion training.
+
+    Covers the episode's spawn/goal bounding box plus `margin`. Returns a
+    dict with uint8 grids [i=x, j=z]:
+      occ    : obstacle footprints
+      hazard : terrain a rover cannot cross (steep grade)
+      sand   : soft ground (0-255)
+    plus the grid origin and resolution. Static per episode -- computed
+    once at data-generation time.
+    """
+    lo_x = min(sim.x, sim.goal_x) - margin
+    lo_z = min(sim.z, sim.goal_z) - margin
+    hi_x = max(sim.x, sim.goal_x) + margin
+    hi_z = max(sim.z, sim.goal_z) + margin
+    nx = int((hi_x - lo_x) / res) + 1
+    nz = int((hi_z - lo_z) / res) + 1
+    xs = lo_x + (np.arange(nx) + 0.5) * res
+    zs = lo_z + (np.arange(nz) + 0.5) * res
+    X, Z = np.meshgrid(xs, zs, indexing="ij")
+
+    occ = np.zeros((nx, nz), bool)
+    for (ox, oz), r in zip(sim.obs_xz, sim.obs_rad):
+        if lo_x - 5 < ox < hi_x + 5 and lo_z - 5 < oz < hi_z + 5:
+            occ |= (X - ox) ** 2 + (Z - oz) ** 2 < (r + 0.3) ** 2
+
+    grade = sim.terrain.grade(X.ravel(), Z.ravel()).reshape(nx, nz)
+    hazard = grade > sim.cfg.grade_block
+    sand = sim.terrain.sand(X.ravel(), Z.ravel()).reshape(nx, nz)
+
+    return {"occ": occ.astype(np.uint8),
+            "hazard": hazard.astype(np.uint8),
+            "sand": (np.clip(sand, 0, 1) * 255).astype(np.uint8),
+            "origin": np.array([lo_x, lo_z], np.float32),
+            "res": np.float32(res)}
 
 
 def goal_vector(lat, lon, heading_deg, goal_lat, goal_lon):
@@ -149,9 +208,15 @@ class EpisodeStyle:
         self.ambient = rng.uniform(0.40, 0.55)
         self.diffuse = rng.uniform(0.45, 0.70)
 
-        self.terrain_amp = rng.uniform(0.0, 1.6)
-        self.terrain_wavelen = rng.uniform(25.0, 60.0)
+        self.terrain_amp = rng.uniform(0.2, 3.0)
+        self.terrain_wavelen = rng.uniform(30.0, 70.0)
         self.ground_noise_wavelen = rng.uniform(8.0, 20.0)
+        # terrain hazard counts (0 keeps some episodes benign, like the
+        # flat worlds of earlier versions -- diversity matters)
+        self.n_mounds = int(rng.integers(0, 6))
+        self.n_washes = int(rng.integers(0, 4))
+        self.n_sand = int(rng.integers(0, 7))
+        self.sand_color = np.array((150, 195, 225), float) * rng.uniform(0.9, 1.1)
 
         self.bump_amp_deg = rng.uniform(0.2, 0.9)
         self.exposure = rng.normal(1.0, 0.05, size=3).clip(0.85, 1.15) * rng.uniform(0.88, 1.12)
@@ -162,37 +227,147 @@ class EpisodeStyle:
 
 
 # ==========================================================================
-# Terrain heightfield
+# Terrain heightfield + ground materials
 # ==========================================================================
 class Terrain:
-    """Rolling heightfield built from a small sum of random sinusoids.
+    """Gridded heightfield with real terrain hazards, plus a sand field.
 
-    Cheap to evaluate anywhere (no grid storage), smooth enough for the
-    camera pitch/roll to follow, and different every episode.
+    Built once per episode on a regular grid (bilinear lookups afterwards):
+      * rolling base relief from random sinusoids,
+      * steep mounds (gaussian bumps whose flanks can exceed drivable grade),
+      * carved washes/gullies (meandering channels with steep banks),
+      * a scalar sand field in [0, 1] (gaussian patches) that reduces
+        traction in physics and recolors the ground in rendering.
+
+    These are Hanksville's actual hazards: the dangerous parts of the world
+    are terrain *properties*, not objects sticking out of the ground.
     """
 
-    def __init__(self, rng: np.random.Generator, amp: float, wavelen: float):
-        """Draw random directions, wavelengths, and phases for 4 waves."""
-        n = 4
-        ang = rng.uniform(0, 2 * np.pi, n)
-        wl = wavelen * rng.uniform(0.6, 1.6, n)
-        self.kx = 2 * np.pi * np.cos(ang) / wl
-        self.kz = 2 * np.pi * np.sin(ang) / wl
-        self.phase = rng.uniform(0, 2 * np.pi, n)
-        self.amp = amp * rng.uniform(0.5, 1.0, n) / n * 2.0
+    EXTENT = 300.0        # grid covers x, z in [-EXTENT, +EXTENT]
+    RES = 1.0             # metres per grid cell
+
+    def __init__(self, rng: np.random.Generator, style):
+        """Rasterize base relief + mounds + washes + sand for one episode."""
+        n = int(2 * self.EXTENT / self.RES) + 1
+        self.n = n
+        ax = np.linspace(-self.EXTENT, self.EXTENT, n)
+        X, Z = np.meshgrid(ax, ax, indexing="ij")     # grid[i, j] = (x, z)
+
+        # --- rolling base (sum of sinusoids, as before but stronger) ---
+        H = np.zeros((n, n), np.float32)
+        for _ in range(4):
+            ang = rng.uniform(0, 2 * np.pi)
+            wl = style.terrain_wavelen * rng.uniform(0.6, 1.6)
+            k = 2 * np.pi / wl
+            H += (style.terrain_amp / 2.0 * rng.uniform(0.5, 1.0) *
+                  np.sin(k * (X * np.cos(ang) + Z * np.sin(ang))
+                         + rng.uniform(0, 2 * np.pi))).astype(np.float32)
+
+        # --- steep mounds (some flanks beyond drivable grade) ---
+        for _ in range(style.n_mounds):
+            mx, mz = rng.uniform(-180, 180, 2)
+            r = rng.uniform(5.0, 14.0)
+            a = rng.uniform(1.2, 3.2)
+            d2 = (X - mx) ** 2 + (Z - mz) ** 2
+            H += (a * np.exp(-d2 / (2 * (r / 2.2) ** 2))).astype(np.float32)
+
+        # --- washes: meandering carved channels with steep banks ---
+        # biased to start inside and run across the mission corridor
+        # (goals sit roughly north of the spawn), so routes actually meet them
+        self.wash_paths = []
+        for _ in range(style.n_washes):
+            pts = [np.array([rng.uniform(-70, 70), rng.uniform(0, 140)])]
+            heading = rng.choice([-1, 1]) * (np.pi / 2) + rng.uniform(-0.7, 0.7)
+            for _ in range(40):
+                heading += rng.uniform(-0.35, 0.35)
+                pts.append(pts[-1] + 6.0 * np.array([np.sin(heading),
+                                                     np.cos(heading)]))
+            pts = np.array(pts)
+            self.wash_paths.append(pts)
+            depth = rng.uniform(0.9, 2.0)
+            width = rng.uniform(2.0, 3.5)
+            # channel cut = max over the segment gaussians (not a sum, or
+            # overlapping segments would dig double-deep pits)
+            carve = np.zeros((n, n), np.float32)
+            for k in range(0, len(pts) - 1):
+                p = pts[k]
+                taper = min(1.0, k / 5.0, (len(pts) - 1 - k) / 5.0)
+                w = int((3 * width) / self.RES) + 1
+                ci = int((p[0] + self.EXTENT) / self.RES)
+                cj = int((p[1] + self.EXTENT) / self.RES)
+                i0, i1 = max(0, ci - w), min(n, ci + w + 1)
+                j0, j1 = max(0, cj - w), min(n, cj + w + 1)
+                if i1 <= i0 or j1 <= j0:
+                    continue
+                d2 = ((X[i0:i1, j0:j1] - p[0]) ** 2 +
+                      (Z[i0:i1, j0:j1] - p[1]) ** 2)
+                # sigma = width/2.6 keeps banks steep: max bank grade is
+                # ~ depth * 0.6 / sigma, comfortably past grade_block for
+                # typical draws -- these are real hazards, not dips
+                cut = depth * taper * np.exp(-d2 / (2 * (width / 2.6) ** 2))
+                carve[i0:i1, j0:j1] = np.maximum(carve[i0:i1, j0:j1],
+                                                 cut.astype(np.float32))
+            H -= carve
+
+        self.H = H
+
+        # --- sand field ---
+        S = np.zeros((n, n), np.float32)
+        for _ in range(style.n_sand):
+            sx, sz = rng.uniform(-160, 160, 2)
+            r = rng.uniform(4.0, 12.0)
+            d2 = (X - sx) ** 2 + (Z - sz) ** 2
+            S += np.exp(-d2 / (2 * (r / 1.6) ** 2)).astype(np.float32)
+        # sand also collects in wash bottoms, like real dry creek beds
+        for pts in self.wash_paths:
+            for p in pts[::2]:
+                ci = int((p[0] + self.EXTENT) / self.RES)
+                cj = int((p[1] + self.EXTENT) / self.RES)
+                w = 4
+                i0, i1 = max(0, ci - w), min(n, ci + w + 1)
+                j0, j1 = max(0, cj - w), min(n, cj + w + 1)
+                if i1 <= i0 or j1 <= j0:
+                    continue
+                d2 = ((X[i0:i1, j0:j1] - p[0]) ** 2 +
+                      (Z[i0:i1, j0:j1] - p[1]) ** 2)
+                S[i0:i1, j0:j1] += 0.7 * np.exp(-d2 / (2 * 2.0 ** 2)).astype(np.float32)
+        self.S = np.clip(S, 0.0, 1.0)
+
+    # ------------- lookups (bilinear, vectorized, edge-clamped) -------------
+    def _bilinear(self, grid, x, z):
+        """Bilinear interpolation of a grid at world (x, z); clamped at edges."""
+        gx = (np.asarray(x, np.float32) + self.EXTENT) / self.RES
+        gz = (np.asarray(z, np.float32) + self.EXTENT) / self.RES
+        gx = np.clip(gx, 0, self.n - 1.001)
+        gz = np.clip(gz, 0, self.n - 1.001)
+        i0 = gx.astype(np.int32)
+        j0 = gz.astype(np.int32)
+        fx = gx - i0
+        fz = gz - j0
+        v = (grid[i0, j0] * (1 - fx) * (1 - fz) +
+             grid[i0 + 1, j0] * fx * (1 - fz) +
+             grid[i0, j0 + 1] * (1 - fx) * fz +
+             grid[i0 + 1, j0 + 1] * fx * fz)
+        return v if v.shape else float(v)
 
     def height(self, x, z):
-        """Vectorized: x, z arrays or scalars -> heights."""
-        x = np.asarray(x, float)[..., None]
-        z = np.asarray(z, float)[..., None]
-        h = np.sum(self.amp * np.sin(x * self.kx + z * self.kz + self.phase), axis=-1)
-        return h if h.shape else float(h)
+        """Terrain height (m) at world (x, z); scalar or vectorized."""
+        return self._bilinear(self.H, x, z)
+
+    def sand(self, x, z):
+        """Sand intensity in [0, 1] at world (x, z)."""
+        return self._bilinear(self.S, x, z)
 
     def slope(self, x, z, d=0.75):
         """Finite-difference terrain gradient (dh/dx, dh/dz) at a point."""
         hx = (self.height(x + d, z) - self.height(x - d, z)) / (2 * d)
         hz = (self.height(x, z + d) - self.height(x, z - d)) / (2 * d)
         return hx, hz
+
+    def grade(self, x, z, d=0.75):
+        """Slope magnitude (rise/run) at world (x, z)."""
+        hx, hz = self.slope(x, z, d)
+        return np.sqrt(hx * hx + hz * hz)
 
 
 # ==========================================================================
@@ -378,7 +553,8 @@ class Renderer:
         self._vignette = self._make_vignette()
         self._prev_frame = None
         self._noise_rng = rng
-        self.grid_step = 3.0
+        # 2.5 m quads: fine enough that washes and mound flanks are visible
+        self.grid_step = 2.5
         self.grid_radius = 57.0
         # low-frequency ground color mixing field
         self._gk = 2 * np.pi / style.ground_noise_wavelen
@@ -412,7 +588,11 @@ class Renderer:
         jit = np.modf(np.abs(np.sin(i * 127.1 + j * 311.7) * 43758.5453))[0]
         col = (self.style.ground_a[None] * (1 - m[..., None]) +
                self.style.ground_b[None] * m[..., None])
-        return col * (0.84 + 0.32 * jit[..., None])
+        col = col * (0.84 + 0.32 * jit[..., None])
+        # sand patches read as light, smooth ground -- the visual cue the
+        # perception net must learn to associate with low traction
+        sand = np.asarray(self.terrain.sand(x, z))[..., None]
+        return col * (1 - 0.85 * sand) + self.style.sand_color[None] * 0.85 * sand
 
     def _terrain_faces(self, cam_pos, R, queue):
         """Append shaded, fogged terrain quads around the camera to the
@@ -680,20 +860,20 @@ class RoverSim:
         self.spawn_mode = spawn_mode
 
         self.style = EpisodeStyle(rng)
-        self.terrain = Terrain(rng, self.style.terrain_amp, self.style.terrain_wavelen)
+        self.terrain = Terrain(rng, self.style)
         self.renderer = Renderer(self.cfg, self.style, self.terrain, rng)
         self.v_max = self.style.v_max
 
-        # --- goal & world ---
+        # --- goal & world (both nudged onto drivable terrain) ---
         gd = rng.uniform(110, 150) if rng.random() < 0.15 else rng.uniform(40, 110)
         gb = math.radians(rng.uniform(-40, 40))
-        self.goal_x = gd * math.sin(gb)
-        self.goal_z = gd * math.cos(gb)
+        self.goal_x, self.goal_z = self._find_drivable(gd * math.sin(gb),
+                                                       gd * math.cos(gb))
         self.obstacles = build_world(rng, self.terrain, self.style,
                                      self.scenario, self.goal_x, self.goal_z)
 
         # --- spawn ---
-        self.x, self.z = 0.0, 0.0
+        self.x, self.z = self._find_drivable(0.0, 0.0)
         self.yaw = math.degrees(gb) + rng.uniform(-30, 30)
         if spawn_mode == "uturn":
             self.yaw = math.degrees(gb) + 180 + rng.uniform(-45, 45)
@@ -723,6 +903,8 @@ class RoverSim:
         self.path_len = 0.0
         self.collided_now = False
         self.collision_count = 0
+        self.tipped = False
+        self.terrain_stalls = 0
 
         # --- sensor biases (OU processes) ---
         self.gps_bias = np.zeros(2)
@@ -800,6 +982,45 @@ class RoverSim:
         """True metric distance to goal (evaluation/termination only)."""
         return math.hypot(self.goal_x - self.x, self.goal_z - self.z)
 
+    def _find_drivable(self, x, z, r_max=20.0):
+        """Nearest point to (x, z) on gentle, firm ground (expanding rings).
+
+        Spawns and goals must not land on a wash bank or a steep mound
+        flank, or episodes start tipped / end unreachable.
+        """
+        if self.terrain_margin(x, z) > 0.5:
+            return x, z
+        for r in np.arange(2.0, r_max, 2.0):
+            for a in np.linspace(0, 2 * np.pi, 16, endpoint=False):
+                cx, cz = x + r * np.sin(a), z + r * np.cos(a)
+                if self.terrain_margin(cx, cz) > 0.5:
+                    return float(cx), float(cz)
+        return x, z
+
+    # ------------- terrain hazard queries -------------
+    def terrain_pose(self, x=None, z=None, yaw=None):
+        """(pitch_grade, roll_grade) of the rover on the terrain: slope
+        components along and across the heading (positive pitch = nose up)."""
+        x = self.x if x is None else x
+        z = self.z if z is None else z
+        yaw = self.yaw if yaw is None else yaw
+        hx, hz = self.terrain.slope(x, z)
+        rad = math.radians(yaw)
+        fx, fz = math.sin(rad), math.cos(rad)
+        pitch = hx * fx + hz * fz
+        roll = hx * fz - hz * fx
+        return float(pitch), float(roll)
+
+    def terrain_margin(self, x=None, z=None):
+        """0..1 traversability margin from terrain alone (1 = flat + firm)."""
+        cfg = self.cfg
+        x = self.x if x is None else x
+        z = self.z if z is None else z
+        g = float(self.terrain.grade(x, z))
+        m_grade = np.clip((cfg.grade_block - g) / cfg.grade_block, 0.0, 1.0)
+        m_sand = 1.0 - 0.6 * float(self.terrain.sand(x, z))
+        return float(min(m_grade, m_sand))
+
     # ------------- dynamics -------------
     def step(self, throttle, steer):
         """Apply one control command (with actuation latency). Returns info dict."""
@@ -807,12 +1028,17 @@ class RoverSim:
         self.cmd_queue.append((float(np.clip(throttle, -1, 1)), float(np.clip(steer, -1, 1))))
         thr, st = self.cmd_queue.pop(0)
 
-        # speed with acceleration limit + slip noise
-        v_target = thr * self.v_max
-        dv = np.clip(v_target - self.v, -cfg.accel_max * dt, cfg.accel_max * dt)
-        self.v = (self.v + dv) * (1 + rng.normal(0, 0.01))
+        # traction: deep sand saps speed and acceleration
+        sand = float(self.terrain.sand(self.x, self.z))
+        traction = 1.0 - cfg.sand_drag * sand
 
-        # steering first-order lag + yaw slip
+        # speed with acceleration limit + slip noise
+        v_target = thr * self.v_max * traction
+        dv = np.clip(v_target - self.v, -cfg.accel_max * traction * dt,
+                     cfg.accel_max * dt)
+        self.v = (self.v + dv) * (1 + rng.normal(0, 0.01 + 0.02 * sand))
+
+        # steering first-order lag + yaw slip (worse in sand)
         yr_target = st * cfg.yaw_rate_max
         alpha = dt / max(cfg.steer_tau, dt)
         self.yaw_rate += (yr_target - self.yaw_rate) * min(alpha, 1.0)
@@ -824,6 +1050,22 @@ class RoverSim:
 
         was_contact = self.collided_now
         self.collided_now = False
+
+        # --- terrain hazards at the proposed position ---
+        pitch_g, roll_g = self.terrain_pose(nx, nz)
+        if abs(roll_g) > cfg.tip_roll or pitch_g < -cfg.tip_roll * 1.4:
+            # crossed too steep a side-slope, or nosed over a drop: tipped.
+            # Terminal -- a real rover does not recover from this alone.
+            self.tipped = True
+            self.v = 0.0
+        elif pitch_g > cfg.grade_block and self.v > 0:
+            # too steep to climb: stall against the grade (contact-like)
+            self.collided_now = True
+            if not was_contact:
+                self.terrain_stalls += 1
+            self.v = 0.0
+            nx, nz = self.x, self.z
+
         if self._hits(nx, nz):
             moved = False
             if self._hits(self.x, self.z):
@@ -860,6 +1102,7 @@ class RoverSim:
         self._sensor_step()
 
         return {"collided": self.collided_now,
+                "tipped": self.tipped,
                 "reached": self.goal_dist_true() < cfg.goal_radius,
                 "timeout": self.frame >= cfg.max_frames,
                 "clearance": self.clearance()}
@@ -888,8 +1131,8 @@ class RoverSim:
         gd = rng.uniform(50, 130)
         gb = math.radians(self.yaw + rng.uniform(-60, 60))
         ox, oz = self.x, self.z
-        self.goal_x = ox + gd * math.sin(gb)
-        self.goal_z = oz + gd * math.cos(gb)
+        self.goal_x, self.goal_z = self._find_drivable(
+            ox + gd * math.sin(gb), oz + gd * math.cos(gb))
         keep = [o for o in self.obstacles
                 if math.hypot(o.x - ox, o.z - oz) < 25.0]
         gx_rel, gz_rel = self.goal_x - ox, self.goal_z - oz

@@ -200,17 +200,22 @@ class MapPilot:
     ARC_T = 2.4              # seconds of arc rollout
     ARC_DT = 0.3
 
-    def __init__(self, checkpoint, device="cuda", vo=True):
+    def __init__(self, checkpoint, device="cuda", vo=True, complete=False):
         """Restore the model and precompute wedge-cell geometry.
 
-        vo=False disables the scan-matching pose correction (useful for
-        ablations; on real hardware with drifting GPS leave it on).
+        vo=False disables the scan-matching pose correction. complete=True
+        lets map-space JEPA predictions bias the planner's costs for
+        unobserved cells -- measured NEUTRAL-TO-NEGATIVE in this sim's
+        closed loop (the wall-continuation prior also paints over unseen
+        gaps, which is anti-exploratory), so it defaults OFF; the completer
+        itself stays trained and drives the ghost visualization either way.
         """
         ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
         self.cfg = Config.from_dict(ckpt["config"])
         mc = self.cfg.model
         self.device = device
         self.vo = vo             # visual-odometry map alignment
+        self.complete = complete # map-space JEPA in the planner
         self.model = RoverJEPA(mc).to(device)
         self.model.load_state_dict(ckpt["model"])
         self.model.eval()
@@ -231,7 +236,14 @@ class MapPilot:
     def reset(self):
         """Wipe the map, pose filter, and histories (new run = new memory)."""
         self.embeds.clear()
-        self.L = np.zeros((self.mc_cells, self.mc_cells), np.float32)
+        n = self.mc_cells
+        self.L = np.zeros((n, n), np.float32)      # occupancy log-odds
+        self.E = np.zeros((n, n), np.float32)      # fused elevation (m)
+        self.EW = np.zeros((n, n), np.float32)     # elevation weight (conf.)
+        self.LS = np.zeros((n, n), np.float32)     # sand log-odds
+        self.LH = np.zeros((n, n), np.float32)     # terrain-hazard log-odds
+        self.pred = None                            # completer output (probs)
+        self.pred_origin = None
         self.origin = None       # lat/lon anchor of the local frame
         self.map_corner = None   # world coords of map cell (0, 0)
         self.pose = None         # filtered (x, z) in local metres
@@ -285,15 +297,16 @@ class MapPilot:
         if np.all(ij > margin) and np.all(ij < self.mc_cells - margin):
             return
         shift_cells = np.floor(ij - self.mc_cells / 2.0).astype(int)
-        newL = np.zeros_like(self.L)
-        src = self.L
         x0, z0 = shift_cells
         xs_src = slice(max(0, x0), min(self.mc_cells, self.mc_cells + x0))
         xs_dst = slice(max(0, -x0), max(0, -x0) + (xs_src.stop - xs_src.start))
         zs_src = slice(max(0, z0), min(self.mc_cells, self.mc_cells + z0))
         zs_dst = slice(max(0, -z0), max(0, -z0) + (zs_src.stop - zs_src.start))
-        newL[xs_dst, zs_dst] = src[xs_src, zs_src]
-        self.L = newL
+        for name in ("L", "E", "EW", "LS", "LH"):  # scroll every belief channel
+            src = getattr(self, name)
+            new = np.zeros_like(src)
+            new[xs_dst, zs_dst] = src[xs_src, zs_src]
+            setattr(self, name, new)
         self.map_corner = self.map_corner + shift_cells * self.res
 
     # ---------------- perception + fusion ----------------
@@ -316,10 +329,13 @@ class MapPilot:
             mots.extend(m)
         tok_stack = torch.stack(toks, dim=1)              # (1, F, nt, fd)
         mot_t = torch.tensor([mots], dtype=torch.float32, device=tokens.device)
-        occ_logit, conf_logit = self.model.map_decoder(tok_stack, mot_t)
+        occ_logit, conf_logit, elev, sand_logit = \
+            self.model.map_decoder(tok_stack, mot_t)
         occ_logit = occ_logit[0].float().cpu().numpy()
         cl = np.clip(conf_logit[0].float().cpu().numpy(), -30.0, 30.0)
         conf = 1.0 / (1.0 + np.exp(-cl))
+        elev = elev[0].float().cpu().numpy()
+        sand_logit = sand_logit[0].float().cpu().numpy()
 
         # belief state for the danger head (kept as a speed governor)
         e = self.model.embed(tokens)
@@ -330,7 +346,7 @@ class MapPilot:
             self.embeds.append(e)
         s = self.model.belief(torch.stack(list(self.embeds), dim=1))[:, -1]
         danger = torch.sigmoid(self.model.danger(s)).item()
-        return occ_logit, conf, danger
+        return occ_logit, conf, elev, sand_logit, danger
 
     PAINT_RANGE_CELLS = 24   # trust the near 12 m for map fusion
     POS_EVIDENCE_SCALE = 0.45  # correlated false positives accumulate; slow
@@ -378,8 +394,15 @@ class MapPilot:
         if best_shift != (0, 0) and best - zero > self.VO_MARGIN:
             self.pose += self.VO_GAIN * np.array(best_shift) * self.res
 
-    def _paint(self, occ_logit, conf):
-        """Fuse one wedge into the persistent log-odds map."""
+    SAND_PRIOR = -2.4        # soft-ground base rate is ~8%
+
+    def _paint(self, occ_logit, conf, elev=None, sand_logit=None):
+        """Fuse one wedge into the persistent multi-channel belief map.
+
+        Occupancy and sand use prior-corrected log-odds; elevation is a
+        confidence-weighted running mean (it is a continuous quantity, not
+        a probability).
+        """
         conf = conf.copy()
         conf[:, self.PAINT_RANGE_CELLS:] = 0.0            # untrusted far field
         conf[conf < 0.55] = 0.0                           # low-vis cells
@@ -414,6 +437,43 @@ class MapPilot:
         # revisable when later evidence disagrees
         np.clip(self.L, -self.LODDS_CLAMP, 3.5, out=self.L)
 
+        if elev is not None:
+            # elevation in the map is ABSOLUTE (relative to the local
+            # origin): wedge elevation is relative to the rover's ground,
+            # whose absolute height we estimate from already-fused cells
+            # near the rover (zero at start).
+            ci = int((self.pose[0] - self.map_corner[0]) / self.res)
+            cj = int((self.pose[1] - self.map_corner[1]) / self.res)
+            w_here = self.EW[ci - 2:ci + 3, cj - 2:cj + 3]
+            e_here = self.E[ci - 2:ci + 3, cj - 2:cj + 3]
+            h0 = float((e_here * w_here).sum() / w_here.sum()) \
+                if w_here.sum() > 0.5 else 0.0
+            ev = elev[ok] + h0
+            wgt = conf[ok]
+            iv, jv = ii[ok], jj[ok]
+            # running weighted mean: E <- (E*W + e*w) / (W + w)
+            old = self.E[iv, jv] * self.EW[iv, jv]
+            self.EW[iv, jv] = np.minimum(self.EW[iv, jv] + wgt, 20.0)
+            self.E[iv, jv] = (old + ev * wgt) / np.maximum(self.EW[iv, jv],
+                                                           1e-6)
+        if sand_logit is not None:
+            sev = np.clip(sand_logit - self.SAND_PRIOR, -4.0, 4.0)
+            sev = np.where(sev > 0, sev * 0.5, sev)
+            np.add.at(self.LS, (ii[ok], jj[ok]), sev[ok] * conf[ok] * 0.55)
+            np.clip(self.LS, -6.0, 4.0, out=self.LS)
+
+        if elev is not None:
+            # terrain-hazard channel: steep grade computed INSIDE the wedge
+            # (per-frame elevations are self-consistent; the fused map has
+            # seams between frames whose gradients are pure pose-drift
+            # artifacts and once produced phantom lethal walls)
+            gx, gz = np.gradient(elev, self.res)
+            grade_w = np.sqrt(gx * gx + gz * gz)
+            haz = grade_w > self.cfg.sim.grade_block
+            hev = np.where(haz, 1.6, -0.8) * conf * 0.55
+            np.add.at(self.LH, (ii[ok], jj[ok]), hev[ok])
+            np.clip(self.LH, -6.0, 3.5, out=self.LH)
+
         # zero-lag near-field guard: distance field of the freshest wedge in
         # the CURRENT rover frame (immune to pose-filter drift)
         blocked = ((evidence > self.GUARD_EVIDENCE) & (conf > 0.5)).astype(np.uint8)
@@ -421,6 +481,53 @@ class MapPilot:
             1 - blocked, cv2.DIST_L2, 3) * self.res
         self._wedge_yaw = math.radians(self.heading)
         self._wedge_pose = self.pose.copy()
+
+    @torch.no_grad()
+    def _complete_map(self):
+        """Run the map-space JEPA completer on the current belief map.
+
+        Builds the completer's input (occupancy prob, believed hazard,
+        sand prob, observed mask) as a comp_cells x comp_cells crop at 1 m
+        around the rover, and returns predicted (occ, hazard, sand)
+        probability grids in the same frame. Cached per control step.
+        The output is a PREDICTION layer: it shapes planning costs and the
+        ghost visualization but is never fused into the evidence map.
+        """
+        if getattr(self, "_pred_step", -1) == self.step_i:
+            return self.pred
+        mc = self.cfg.model
+        G, cres = mc.comp_cells, mc.comp_res
+        half_m = G * cres / 2.0
+        x0 = self.pose[0] - half_m
+        z0 = self.pose[1] - half_m
+        # sample belief channels at the 1 m completion grid
+        xs = x0 + (np.arange(G) + 0.5) * cres
+        zs = z0 + (np.arange(G) + 0.5) * cres
+        ii = np.clip(((xs - self.map_corner[0]) / self.res).astype(int),
+                     0, self.mc_cells - 1)
+        jj = np.clip(((zs - self.map_corner[1]) / self.res).astype(int),
+                     0, self.mc_cells - 1)
+        Lc = self.L[np.ix_(ii, jj)]
+        EWc = self.EW[np.ix_(ii, jj)]
+        LSc = self.LS[np.ix_(ii, jj)]
+        LHc = self.LH[np.ix_(ii, jj)]
+        occ_p = 1.0 / (1.0 + np.exp(-np.clip(Lc, -10, 10)))
+        known_e = EWc > 1.0
+        hazard = (1.0 / (1.0 + np.exp(-np.clip(LHc, -10, 10)))
+                  > 0.6).astype(np.float32)
+        sand_p = 1.0 / (1.0 + np.exp(-np.clip(LSc, -10, 10)))
+        observed = ((np.abs(Lc) > 0.4) | known_e).astype(np.float32)
+        comp_in = np.stack([occ_p * observed, hazard, sand_p * observed,
+                            observed]).astype(np.float32)
+        with torch.autocast(self.device, enabled=self.device != "cpu"):
+            logit = self.model.map_completer(
+                torch.from_numpy(comp_in)[None].to(self.device))
+        pred = torch.sigmoid(logit[0].float()).cpu().numpy()
+        self.pred = pred
+        self.pred_origin = np.array([x0, z0])
+        self.pred_observed = observed
+        self._pred_step = self.step_i
+        return pred
 
     # ---------------- planning ----------------
     def _plan_window(self):
@@ -461,6 +568,46 @@ class MapPilot:
         d2 = self._dist_m[:ph * 2, :pw * 2].reshape(ph, 2, pw, 2).min(axis=(1, 3))
         lethal = d2 < 0.9                       # rover radius + margin
         cost = 1.0 + 6.0 * p2 + np.where(d2 < 2.0, (2.0 - d2) * 2.0, 0.0)
+
+        # ---- believed terrain: hazard channel (per-wedge grades), sand ----
+        EW = self.EW[i0:i1, j0:j1]
+        known_e = EW > 1.0
+        hazp = 1.0 / (1.0 + np.exp(-self.LH[i0:i1, j0:j1]))
+        h2 = hazp[:ph * 2, :pw * 2].reshape(ph, 2, pw, 2).max(axis=(1, 3))
+        lethal = lethal | (h2 > 0.7)
+        cost += 5.0 * np.clip(h2 / 0.7, 0, 1)
+        sandp = 1.0 / (1.0 + np.exp(-self.LS[i0:i1, j0:j1]))
+        s2 = sandp[:ph * 2, :pw * 2].reshape(ph, 2, pw, 2).max(axis=(1, 3))
+        cost += 3.0 * s2
+
+        # ---- map-space JEPA: anticipate the unobserved cells ----
+        observed = ((np.abs(L) > 0.4) | known_e)
+        o2 = observed[:ph * 2, :pw * 2].reshape(ph, 2, pw, 2).max(axis=(1, 3))
+        if self.complete:
+            pred = self._complete_map()
+            if pred is not None:
+                # sample the completer's 1 m grid at planning-cell centers
+                pi = ((self.map_corner[0] + (i0 + np.arange(ph) * 2 + 1) *
+                       self.res) - self.pred_origin[0])
+                pj = ((self.map_corner[1] + (j0 + np.arange(pw) * 2 + 1) *
+                       self.res) - self.pred_origin[1])
+                pi = np.clip(pi.astype(int), 0, pred.shape[1] - 1)
+                pj = np.clip(pj.astype(int), 0, pred.shape[2] - 1)
+                pocc = pred[0][np.ix_(pi, pj)]
+                phaz = pred[1][np.ix_(pi, pj)]
+                psand = pred[2][np.ix_(pi, pj)]
+                # HAZARD and SAND predictions steer routing: "the wash
+                # probably continues" keeps the rover off unseen banks (this
+                # measurably cuts tip-overs). OCCUPANCY predictions are used
+                # only when very confident: a wall-continuation prior also
+                # paints over the unseen GAP the rover should be probing
+                # for, which turned out to be anti-exploratory in practice.
+                unobs = ~o2
+                cost += unobs * (6.0 * phaz
+                                 + 2.0 * np.clip(psand - 0.05, 0, 1)
+                                 + 4.0 * np.clip((pocc - 0.5) / 0.5, 0, 1))
+        # mild flat penalty for unknown space remains (exploration is not free)
+        cost += (~o2) * 0.3
 
         def to_cell(p):
             """World point -> clamped planning-grid cell."""
@@ -611,6 +758,19 @@ class MapPilot:
         clear = np.minimum(clear, wclear)
         feasible = clear > 0.05
 
+        # believed-terrain feasibility along arcs: reject arcs crossing
+        # cells the hazard channel believes are too steep
+        ai = np.clip(((pts[..., 0] - self.map_corner[0]) / self.res)
+                     .astype(int), 0, self.mc_cells - 1)
+        aj = np.clip(((pts[..., 1] - self.map_corner[1]) / self.res)
+                     .astype(int), 0, self.mc_cells - 1)
+        haz_arc = 1.0 / (1.0 + np.exp(-self.LH[ai, aj]))
+        terrain_bad = haz_arc.max(axis=1) > 0.65
+        feasible &= ~terrain_bad
+        clear = np.where(terrain_bad, np.minimum(clear, 0.0), clear)
+        # believed sand ahead (for the throttle governor below)
+        sand_arc = 1.0 / (1.0 + np.exp(-self.LS[ai, aj]))
+
         # stuck detection from filtered pose (contact isn't sensed directly)
         if self._last_pos is not None and abs(v_meas) < 0.35:
             self._stuck_frames += 1
@@ -673,7 +833,10 @@ class MapPilot:
         v_clear = np.clip(clear[best] / 3.5, 0.35, 1.0)
         v_turn = 1.0 - 0.4 * abs(steer)
         v_goal = np.clip(goal_d / 8.0, 0.3, 1.0)
-        throttle = float(np.clip(min(v_clear, v_turn, v_goal), 0.25, 1.0))
+        # believed soft ground ahead: slow before the wheels find out
+        v_sand = 1.0 - 0.45 * float(sand_arc[best, :4].max())
+        throttle = float(np.clip(min(v_clear, v_turn, v_goal, v_sand),
+                                 0.25, 1.0))
         # thread tight passages slowly: with 200 ms actuation latency and
         # steering lag, speed is what turns a near-miss into a graze
         if hasattr(self, "_wedge_dist"):
@@ -692,8 +855,9 @@ class MapPilot:
     def step(self, frame_bgr, sensors):
         """sensors: dict with lat, lon, heading, speed, goal_lat, goal_lon."""
         self._update_pose(sensors)
-        occ_logit, conf, danger = self._perceive(frame_bgr, sensors)
-        self._paint(occ_logit, conf)
+        occ_logit, conf, elev, sand_logit, danger = \
+            self._perceive(frame_bgr, sensors)
+        self._paint(occ_logit, conf, elev, sand_logit)
         if self.step_i % self.REPLAN_EVERY == 0 or self.path is None:
             self._replan()
         throttle, steer = self._control(danger, sensors["speed"])

@@ -1,11 +1,11 @@
-python generate_synth_data.py --episodes 400 --output data_v9
-python generate_synth_data.py --episodes 150 --output data_v9_wall --scenario wall --seed 50000
-python drjepa.py preprocess --data_dir data_v9,data_v9_wall --output packed
+python generate_synth_data.py --episodes 400 --output data_v10
+python generate_synth_data.py --episodes 150 --output data_v10_wall --scenario wall --seed 50000
+python drjepa.py preprocess --data_dir data_v10,data_v10_wall --output packed
 python drjepa.py train --dataset packed --save_dir runs
 python drjepa.py eval --policy expert --episodes 40 --record 3
 python drjepa.py eval --policy model --pilot map --checkpoint runs/best.pth --episodes 40 --record 3
 python drjepa.py eval --policy model --pilot bc --checkpoint runs/best.pth --episodes 40
-python drjepa.py viz --video data_v9/open_normal_00011.mp4 --checkpoint runs/best.pth
+python drjepa.py viz --video data_v10/open_normal_00011.mp4 --checkpoint runs/best.pth
 python live_inference_test.py --checkpoint runs/best.pth
 python live_inference_test.py --checkpoint runs/best.pth --headless --frames 3000
 python fsd_viz.py --checkpoint runs/best.pth --frames 900 --output_video fsd_demo.mp4

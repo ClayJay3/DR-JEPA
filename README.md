@@ -1,4 +1,4 @@
-# DR-JEPA: Camera + Goal-Vector Autonomous Rover Navigation
+# DR-JEPA v10: Camera + Goal-Vector Autonomous Rover Navigation
 
 DR-JEPA drives a rover to a GPS goal using **one forward camera and a goal
 vector — nothing else**. No lidar, no depth sensor, no prior map.
@@ -403,10 +403,14 @@ Training data comes from a domain-randomized simulator
 (`drjepa/simulator.py`) engineered so that *nothing the model relies on is
 sim-specific*:
 
-- **Geometry:** rolling heightfield terrain (camera pitch/roll follows the
-  ground), irregular jittered-mesh rocks/trees/bushes, four scenario types
-  (open scatter, dense forest, walls with gaps, boulder fields) plus u-turn
-  and stuck-recovery spawns.
+- **Geometry & terrain hazards:** gridded heightfield with rolling relief,
+  **carved washes/gullies** (steep, often un-climbable banks), **steep
+  mounds**, and **sand fields** that visually recolor the ground and
+  physically sap traction. Camera pitch/roll follows the ground. Crossing
+  too steep a side-slope tips the rover (terminal); grades past the climb
+  limit stall it. Irregular jittered-mesh rocks/trees/bushes, four scenario
+  types (open scatter, dense forest, walls with gaps, boulder fields) plus
+  u-turn and stuck-recovery spawns.
 - **Appearance randomized per episode:** sun direction and intensity, sky
   palette, ground/rock/vegetation palettes, fog density, exposure and
   white-balance, vignette, sensor noise, motion blur, ride-bump camera
@@ -443,24 +447,52 @@ flowchart LR
 
 ## Results in detail
 
-Held-out seed block (30 worlds never used for any tuning decision):
+### v10: terrain-hazard worlds (washes, steep grades, soft sand)
 
-| metric | expert (privileged) | DR-JEPA v9 | DR-JEPA v8 | BC pilot (v7) |
-|---|---:|---:|---:|---:|
-| success rate | 96.7% | **100%** | 100% | 62.5% |
-| SPL | 0.94 | **0.889** | 0.878 | 0.44 |
-| contact events / episode | 0.23 | **1.87** | 2.10 | 6.5 |
+v10 rebuilt the simulator around Hanksville-class terrain hazards -- carved
+washes with un-climbable banks, steep mounds, sand that saps traction, and
+real failure physics (tip-over is terminal, steep grades stall) -- and
+extended perception to a four-channel wedge (occupancy, visibility,
+**elevation**, **soft ground**). Pooled over 110 unseen worlds:
 
-Perception quality (validation episodes): occupancy **AUC 0.930**,
-occupied/free logit separation 5.5. Per scenario the model is strongest in
-dense forest and open terrain and weakest threading wall gaps — which is a
-pose/control limitation, not perception: an **oracle ablation** (ground
-truth wedges through the identical fusion/planning stack) lands in the same
-1.5–3 contacts band. Remaining contacts are grazes while threading gaps
-under ~1 m GPS error and 200 ms actuation latency.
+| metric | expert (privileged) | DR-JEPA v10 |
+|---|---:|---:|
+| success rate | 100% | **91%** |
+| tipped episodes | 0% | 6% |
+| SPL | 0.92–0.97 | 0.76 |
+| contact events / episode | 0.03 | 2.1 |
 
-Endless mode: 11 consecutive goals in one continuous run on a single
-persistent map, no timeouts.
+For calibration: earlier versions had *no concept* of these hazards -- on
+v10 worlds they would drive straight into the first wash. Elevation is
+predicted to ~4 cm mean error where visible; sand classification is
+near-perfect (it is a strong visual cue by design). One fusion lesson made
+the difference between 60% and 90% success: terrain-hazard lethality must
+be computed from gradients **inside a single wedge** (self-consistent) and
+fused as its own log-odds channel -- gradients across the fused elevation
+map's frame-to-frame seams are pose-drift artifacts that once built
+phantom lethal walls.
+
+### v9 flat-world results (obstacles only, for reference)
+
+| metric | expert (privileged) | DR-JEPA v9 | BC pilot (v7) |
+|---|---:|---:|---:|
+| success rate | 96.7% | **100%** | 62.5% |
+| SPL | 0.94 | **0.889** | 0.44 |
+| contact events / episode | 0.23 | **1.87** | 6.5 |
+
+### Map-space JEPA (completion): what we measured, honestly
+
+The MapCompleter genuinely anticipates hidden map content (hidden-cell
+occupancy **AUC 0.745**, hazard **AUC 0.800** on validation) and drives the
+violet ghost layer in the visualizer. Feeding its predictions into the
+planner's costs, however, measured **neutral-to-slightly-negative** in
+closed loop across three integration variants and 110 episodes per arm
+(-3 pts success, -0.05 SPL): the wall-continuation prior also paints over
+the unseen *gap* the rover should probe -- an anti-exploratory failure that
+outweighs the tip-protection it provides near unseen wash banks. Planner
+integration therefore defaults OFF (`--complete` to enable); the trained
+head remains for visualization, analysis, and future information-gain
+planning that reasons about prediction *uncertainty* rather than raw cost.
 
 ---
 
@@ -474,11 +506,11 @@ source .venv/bin/activate
 
 ```bash
 # 1 · generate the dataset (video + telemetry + wedge ground truth)
-python generate_synth_data.py --episodes 400 --output data_v9
-python generate_synth_data.py --episodes 150 --output data_v9_wall --scenario wall --seed 50000
+python generate_synth_data.py --episodes 400 --output data_v10
+python generate_synth_data.py --episodes 150 --output data_v10_wall --scenario wall --seed 50000
 
 # 2 · pack: run every frame through frozen DINOv2 once
-python drjepa.py preprocess --data_dir data_v9,data_v9_wall --output packed
+python drjepa.py preprocess --data_dir data_v10,data_v10_wall --output packed
 
 # 3 · train
 python drjepa.py train --dataset packed --save_dir runs
@@ -492,7 +524,7 @@ python drjepa.py eval ... --no_vo                            # VO ablation
 # 5 · watch it drive
 python live_inference_test.py --checkpoint runs/best.pth     # endless run + HUD
 python fsd_viz.py --checkpoint runs/best.pth --frames 900    # cinematic belief view
-python drjepa.py viz --video data_v9/<episode>.mp4 --checkpoint runs/best.pth
+python drjepa.py viz --video data_v10/<episode>.mp4 --checkpoint runs/best.pth
 ```
 
 ---

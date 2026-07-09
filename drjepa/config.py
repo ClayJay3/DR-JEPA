@@ -26,6 +26,12 @@ class SimConfig:
     heading_bias_sigma: float = 2.5  # slowly-varying compass bias (deg)
     heading_noise_sigma: float = 1.0 # white compass noise (deg)
 
+    # Terrain hazard limits (shared by physics, expert costs, and GT labels)
+    grade_drive: float = 0.35        # comfortable grade (rise/run)
+    grade_block: float = 0.55        # climbing steeper than this stalls out
+    tip_roll: float = 0.50           # lateral grade that tips the rover over
+    sand_drag: float = 0.55          # fraction of speed lost in deep sand
+
     # Episode logic
     goal_radius: float = 4.0         # success distance (m)
     max_frames: int = 900            # 90 s cap per episode
@@ -52,6 +58,9 @@ class ModelConfig:
     # multi-frame perception: the wedge decoder sees the current frame plus
     # these lookbacks (control steps), giving it motion parallax
     frame_offsets: tuple = (0, 2, 4)
+    # map-space JEPA (completion of unobserved map areas)
+    comp_cells: int = 80             # completion crop (80 m x 80 m @ 1 m)
+    comp_res: float = 1.0
 
     embed_dim: int = 256             # frame embedding / belief state width
     seq_len: int = 12                # temporal context (1.2 s at 10 Hz)
@@ -89,6 +98,9 @@ class TrainConfig:
     w_safety: float = 0.5
     w_jepa: float = 0.5
     w_map: float = 2.0               # occupancy-wedge prediction (primary)
+    w_elev: float = 1.0              # elevation regression (terrain wedge)
+    w_sand: float = 0.5              # soft-ground classification
+    w_complete: float = 1.0          # map-space JEPA (hidden-map prediction)
     occ_pos_weight: float = 1.5      # mild: the fusion prior handles the
     #                                  base rate; large values fatten the
     #                                  false-positive tail that pollutes maps

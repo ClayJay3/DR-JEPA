@@ -32,6 +32,8 @@ PATH_CORE = (255, 210, 60)      # cyan-ish blue
 PATH_GLOW = (140, 90, 20)
 ARC_CORE = (160, 255, 120)
 GOAL_COL = (60, 170, 255)       # amber
+GHOST_OCC = (200, 90, 170)      # violet: JEPA-predicted (unseen) obstacles
+GHOST_OPEN = (54, 42, 34)       # faint tint: predicted-open unseen ground
 BOX_FILL_LO = np.array((70, 44, 16), np.float32)
 BOX_FILL_HI = np.array((200, 140, 40), np.float32)
 BOX_EDGE = (255, 216, 120)
@@ -173,6 +175,53 @@ class FSDRenderer:
         for k in range(gz0, n, step):
             img[k, :] = np.where(m[k, :, None], np.array(GRID_LINE),
                                  img[k, :]).astype(np.uint8)
+
+        # --- JEPA ghost layer: predicted content of UNSEEN space ---
+        # violet = predicted obstacles/hazards, faint warm tint = predicted
+        # open ground. Rendered from the completer's prediction layer, which
+        # is kept strictly separate from the observed-evidence map: watch
+        # ghosts solidify (guess confirmed) or dissolve (guess refuted) as
+        # the camera reaches them. Computed for the viz even when the
+        # planner is not consuming predictions.
+        p._complete_map()
+        if p.pred is not None:
+            Gp = p.pred.shape[1]
+            pres = p.cfg.model.comp_res
+            gx0 = (p.pred_origin[0] - x0) * s
+            cell_px = pres * s
+            blocked = np.maximum(p.pred[0], p.pred[1])
+            unobs = p.pred_observed < 0.5
+            open_m = unobs & (blocked < 0.25)
+            occ_m = unobs & (blocked > 0.45)
+            # paint into a small grid image then resize into place
+            gimg = np.zeros((Gp, Gp, 3), np.float32)
+            gimg[open_m] = GHOST_OPEN
+            strength = np.clip((blocked - 0.45) / 0.4, 0, 1)[occ_m, None]
+            gimg[occ_m] = (np.array(GHOST_OCC, np.float32)[None]
+                           * (0.45 + 0.55 * strength))
+            galpha = np.zeros((Gp, Gp), np.float32)
+            galpha[open_m] = 0.5
+            galpha[occ_m] = 0.5 + 0.4 * strength[:, 0]
+            # grid [i=x, j=z] -> image rows = -z, cols = x
+            gimg = np.ascontiguousarray(np.flipud(gimg.transpose(1, 0, 2)))
+            galpha = np.ascontiguousarray(np.flipud(galpha.T))
+            gw = int(Gp * cell_px)
+            gimg = cv2.resize(gimg, (gw, gw), interpolation=cv2.INTER_NEAREST)
+            galpha = cv2.resize(galpha, (gw, gw),
+                                interpolation=cv2.INTER_NEAREST)
+            c0 = int(gx0)                                  # left column
+            r0 = int((z0 - (p.pred_origin[1] + Gp * pres)) * s)  # top row
+            rr0, cc0 = max(0, r0), max(0, c0)
+            rr1 = min(n, r0 + gw)
+            cc1 = min(n, c0 + gw)
+            if rr1 > rr0 and cc1 > cc0:
+                sub_i = slice(rr0 - r0, rr0 - r0 + (rr1 - rr0))
+                sub_j = slice(cc0 - c0, cc0 - c0 + (cc1 - cc0))
+                a = galpha[sub_i, sub_j][..., None]
+                roi = img[rr0:rr1, cc0:cc1].astype(np.float32)
+                img[rr0:rr1, cc0:cc1] = (roi * (1 - a) +
+                                         gimg[sub_i, sub_j] * a
+                                         ).astype(np.uint8)
 
         # trail
         if len(self.trail) > 2:
@@ -422,7 +471,7 @@ class FSDRenderer:
 
         # ---- status (top left) ----
         self._panel(canvas, 18, 18, 240, 116)
-        _put(canvas, "DR-JEPA v9", (30, 44), 0.62, HUD_VALUE)
+        _put(canvas, "DR-JEPA v10", (30, 44), 0.62, HUD_VALUE)
         _put(canvas, "BELIEF-SPACE NAVIGATION", (30, 62), 0.36)
         d = float(np.linalg.norm(p.goal - p.pose))
         _put(canvas, "GOAL", (30, 88), 0.4)
@@ -614,6 +663,9 @@ def main():
                     writer.release()
                     return
         info = sim.step(out["throttle"], out["steer"])
+        if info["tipped"]:
+            print(f"  [{n:4d}] tipped over -- ending run")
+            break
         if info["reached"] or info["timeout"]:
             goals += info["reached"]
             print(f"  [{n:4d}] {'goal reached' if info['reached'] else 'timeout'}"

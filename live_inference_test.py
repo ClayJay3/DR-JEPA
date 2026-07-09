@@ -61,6 +61,10 @@ def main():
             if cv2.waitKey(1) == ord("q"):
                 break
 
+        if info["tipped"]:
+            print(f"[{n:5d}] TIPPED OVER -- run ends here "
+                  f"(goals reached: {goals})")
+            break
         if info["reached"]:
             goals += 1
             print(f"[{n:5d}] goal #{goals} reached "

@@ -23,7 +23,8 @@ import pandas as pd
 from tqdm import tqdm
 import multiprocessing as mp
 
-from drjepa.simulator import RoverSim, SimConfig, wedge_ground_truth
+from drjepa.simulator import (RoverSim, SimConfig, wedge_ground_truth,
+                              episode_gt_grids)
 from drjepa.expert import ArcPlanner, NoiseInjector
 
 WEDGE_CELLS = 48
@@ -76,15 +77,19 @@ def generate_episode(ep_id):
     writer = cv2.VideoWriter(vid_path, cv2.VideoWriter_fourcc(*"mp4v"),
                              1.0 / sim.cfg.dt, (sim.cfg.img_w, sim.cfg.img_h))
     rows = []
-    occ_bits, vis_bits = [], []
+    occ_bits, vis_bits, elev_q, sand_q = [], [], [], []
     reached = False
+    tipped = False
     while True:
         frame = sim.render()
         sensors = sim.sensor_readout()
         clearance = sim.clearance()
-        occ, vis = wedge_ground_truth(sim, WEDGE_CELLS, WEDGE_RES)
+        occ, vis, elev, sand = wedge_ground_truth(sim, WEDGE_CELLS, WEDGE_RES)
         occ_bits.append(np.packbits(occ))
         vis_bits.append(np.packbits(vis))
+        # elevation quantized to int8 (:: 3.5 m / 127 per unit)
+        elev_q.append(np.clip(elev / 3.5 * 127, -127, 127).astype(np.int8))
+        sand_q.append((np.clip(sand, 0, 1) * 255).astype(np.uint8))
         label_thr, label_steer = expert.plan()
         if pilot:
             # DAgger: the model drives, the expert labels. A small expert
@@ -97,7 +102,10 @@ def generate_episode(ep_id):
                 exec_thr, exec_steer = out["throttle"], out["steer"]
         else:
             exec_thr, exec_steer = noise.apply(label_thr, label_steer, clearance)
-        trav = float(np.clip(clearance / 6.0, 0.0, 1.0))
+        # traversability = worst of obstacle clearance and terrain margin
+        # (steep grades and deep sand read as danger, same as obstacles)
+        trav = float(np.clip(min(clearance / 6.0, sim.terrain_margin()),
+                             0.0, 1.0))
         if sim.collided_now:
             trav = 0.0
 
@@ -116,6 +124,9 @@ def generate_episode(ep_id):
         })
 
         info = sim.step(exec_thr, exec_steer)
+        if info["tipped"]:
+            tipped = True
+            break
         if info["reached"]:
             reached = True
             break
@@ -124,12 +135,17 @@ def generate_episode(ep_id):
 
     writer.release()
     pd.DataFrame(rows).to_csv(csv_path, index=False)
+    gt = episode_gt_grids(sim)
     np.savez_compressed(os.path.join(args.output, base + ".npz"),
                         occ=np.stack(occ_bits), vis=np.stack(vis_bits),
+                        elev=np.stack(elev_q), sand=np.stack(sand_q),
+                        gt_occ=gt["occ"], gt_hazard=gt["hazard"],
+                        gt_sand=gt["sand"], gt_origin=gt["origin"],
+                        gt_res=gt["res"],
                         cells=WEDGE_CELLS, res=WEDGE_RES)
     return {"ep": ep_id, "frames": len(rows), "reached": reached,
-            "collisions": sim.collision_count, "scenario": sim.scenario,
-            "spawn": sim.spawn_mode}
+            "tipped": tipped, "collisions": sim.collision_count,
+            "scenario": sim.scenario, "spawn": sim.spawn_mode}
 
 
 def main():
@@ -168,6 +184,7 @@ def main():
     print(f"\nDone. {n} episodes, {df['frames'].sum()} frames total.")
     print(f"  expert success rate : {df['reached'].mean() * 100:.1f}%")
     print(f"  episodes w/ contact : {(df['collisions'] > 0).mean() * 100:.1f}%")
+    print(f"  tipped episodes     : {df['tipped'].mean() * 100:.1f}%")
     print(f"  mean frames/episode : {df['frames'].mean():.0f}")
     print(df.groupby("scenario")["reached"].agg(["count", "mean"]))
 
