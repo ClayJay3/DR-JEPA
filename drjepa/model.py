@@ -75,23 +75,26 @@ class FrameEncoder(nn.Module):
 
 
 class MapDecoder(nn.Module):
-    """Per-frame metric perception: DINOv2 tokens -> occupancy wedge.
+    """Multi-frame metric perception: DINOv2 tokens -> occupancy wedge.
 
     Predicts, for the 24m x 24m area in front of the camera (48x48 cells),
     a per-cell occupancy logit and a per-cell visibility/confidence logit.
-    This is the head that gives the model an actual geometric understanding
-    of the scene; its (calibrated) outputs are fused into the persistent
-    world map at inference time.
+    The decoder sees the current frame plus cfg.frame_offsets lookbacks
+    (channel-stacked per grid position) together with the ego-motion of
+    those frames (speed + commanded steer), so it can exploit motion
+    parallax -- the strongest monocular depth cue -- instead of texture
+    scale alone. Outputs are fused into the persistent world map.
     """
 
     def __init__(self, cfg: ModelConfig):
         super().__init__()
         self.rows, self.cols = cfg.pool_rows, cfg.pool_cols
         self.cells = cfg.wedge_cells
+        self.n_frames = len(cfg.frame_offsets)
         assert self.cells % self.rows == 0, "wedge must be a multiple of grid"
         n_up = int(math.log2(self.cells // self.rows))
-        self.cls_proj = nn.Linear(cfg.feat_dim, 64)
-        self.token_proj = nn.Linear(cfg.feat_dim + 64, 256)
+        self.cls_proj = nn.Linear(cfg.feat_dim + 2 * self.n_frames, 64)
+        self.token_proj = nn.Linear(cfg.feat_dim * self.n_frames + 64, 256)
         ch = [256, 128, 64, 32]
         layers = [nn.Conv2d(256, 256, 3, 1, 1), nn.GELU()]
         for i in range(n_up):                    # e.g. 12x12 -> 48x48
@@ -99,14 +102,20 @@ class MapDecoder(nn.Module):
                        nn.Conv2d(ch[i + 1], ch[i + 1], 3, 1, 1), nn.GELU()]
         self.net = nn.Sequential(*layers, nn.Conv2d(ch[n_up], 2, 3, 1, 1))
 
-    def forward(self, tokens):
-        """tokens (..., n_tokens, feat_dim) -> occ, conf logits (..., C, C),
-        indexed [i = x_right, j = z_forward] (rover frame)."""
-        lead = tokens.shape[:-2]
-        t = tokens.reshape(-1, tokens.shape[-2], tokens.shape[-1])
-        cls, grid = t[:, 0], t[:, 1:]
-        c = self.cls_proj(cls)[:, None].expand(-1, grid.shape[1], -1)
-        x = self.token_proj(torch.cat([grid, c], dim=-1))
+    def forward(self, tokens, motion):
+        """tokens (..., F, n_tokens, feat_dim) stacked [current, -2, -4, ...];
+        motion (..., F*2) = (speed, steer) per stacked frame.
+        Returns occ, conf logits (..., C, C) indexed [i = x_right,
+        j = z_forward] (rover frame)."""
+        lead = tokens.shape[:-3]
+        F_, nt, fd = tokens.shape[-3:]
+        t = tokens.reshape(-1, F_, nt, fd)
+        m = motion.reshape(-1, motion.shape[-1])
+        cls = t[:, 0, 0]                                   # current-frame CLS
+        grid = t[:, :, 1:].permute(0, 2, 1, 3).reshape(-1, nt - 1, F_ * fd)
+        c = self.cls_proj(torch.cat([cls, m], dim=-1))
+        x = self.token_proj(torch.cat([grid, c[:, None].expand(-1, nt - 1, -1)],
+                                      dim=-1))
         x = x.view(-1, self.rows, self.cols, 256).permute(0, 3, 1, 2)
         out = self.net(x)                        # (N, 2, cells, cells)
         # conv output is image-aligned (row ~ image-y ~ distance-from-far,
@@ -238,7 +247,7 @@ class RoverJEPA(nn.Module):
 
     # ------------------------------------------------------------------
     def compute_losses(self, tokens, label_actions, exec_actions, ctx, danger,
-                       dist, occ_gt, vis_gt, train_cfg):
+                       dist, occ_gt, vis_gt, motion, train_cfg):
         """All training losses for one batch.
 
         tokens:        (B, W, n_tokens, feat_dim)  W = seq_len + k_max
@@ -248,6 +257,7 @@ class RoverJEPA(nn.Module):
         danger:        (B, W, 1) in [0, 1]
         dist:          (B, W, 1) normalized goal distance per frame
         occ_gt/vis_gt: (B, W, cells, cells) wedge occupancy / visibility
+        motion:        (B, W, 2)   (speed, executed steer) per frame
         """
         cfg = self.cfg
         S = cfg.seq_len
@@ -282,7 +292,17 @@ class RoverJEPA(nn.Module):
             d_logit, danger[:, :S].reshape(B * S, 1))
 
         # ---------------- metric perception (occupancy wedge) ----------------
-        occ_logit, conf_logit = self.map_decoder(tokens)     # (B, W, C, C)
+        # stack the multi-frame input with strided slices; supervise every
+        # second frame past the lookback warm-up
+        offs = cfg.frame_offsets
+        m_off = max(offs)
+        tok_stack = torch.stack(
+            [tokens[:, m_off - o:W - o:2] for o in offs], dim=2)
+        mot_stack = torch.cat(
+            [motion[:, m_off - o:W - o:2] for o in offs], dim=-1)
+        occ_logit, conf_logit = self.map_decoder(tok_stack, mot_stack)
+        occ_gt = occ_gt[:, m_off::2]
+        vis_gt = vis_gt[:, m_off::2]
         C = occ_logit.shape[-1]
         # nearer rows matter more for driving; beyond wedge_range_cells the
         # monocular distance ambiguity is too large to supervise usefully

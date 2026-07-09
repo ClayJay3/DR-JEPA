@@ -6,8 +6,8 @@ from dataclasses import dataclass, field, asdict
 @dataclass
 class SimConfig:
     """Simulation / rendering parameters (data generation + live testing)."""
-    img_w: int = 256                 # render resolution (downsampled to model size later)
-    img_h: int = 256
+    img_w: int = 448                 # render resolution; keep >= ModelConfig.img_size
+    img_h: int = 448                 # or the extra model resolution buys nothing
     fov_deg: float = 90.0
     dt: float = 0.1                  # control period (10 Hz)
     cam_height: float = 1.1          # camera height above local terrain (m)
@@ -34,7 +34,10 @@ class SimConfig:
 @dataclass
 class ModelConfig:
     """RoverJEPA architecture."""
-    img_size: int = 224              # DINOv2 input resolution
+    img_size: int = 448              # DINOv2 input resolution (must be a
+    #                                  multiple of 14; raise/lower to trade
+    #                                  perception sharpness vs speed; frames
+    #                                  are resized to this before the backbone)
     backbone: str = "dinov2_vits14"  # frozen; features are precomputed
     feat_dim: int = 384              # DINOv2 ViT-S embedding width
     pool_rows: int = 12              # patch-token pooling grid (vertical)
@@ -46,6 +49,9 @@ class ModelConfig:
     wedge_res: float = 0.5           # metres per cell (24m x 24m ahead)
     wedge_range_cells: int = 32      # supervise/trust only the near 16 m
     map_cells: int = 512             # persistent world map (256m x 256m)
+    # multi-frame perception: the wedge decoder sees the current frame plus
+    # these lookbacks (control steps), giving it motion parallax
+    frame_offsets: tuple = (0, 2, 4)
 
     embed_dim: int = 256             # frame embedding / belief state width
     seq_len: int = 12                # temporal context (1.2 s at 10 Hz)
@@ -102,10 +108,13 @@ class Config:
 
     @staticmethod
     def from_dict(d):
+        m = dict(d.get("model", {}))
+        for key, default in (("jepa_offsets", (1, 4, 8)),
+                             ("frame_offsets", (0, 2, 4))):
+            m[key] = tuple(m.get(key, default))
         return Config(
             sim=SimConfig(**d.get("sim", {})),
-            model=ModelConfig(**{**d.get("model", {}),
-                                 "jepa_offsets": tuple(d.get("model", {}).get("jepa_offsets", (1, 4, 8)))}),
+            model=ModelConfig(**m),
             train=TrainConfig(**d.get("train", {})),
         )
 

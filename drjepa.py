@@ -82,12 +82,13 @@ def train(args):
         t0 = time.time()
         agg = {}
         for batch in train_loader:
-            tokens, label, execu, ctx, danger, dist, occ, vis = [
+            tokens, label, execu, ctx, danger, dist, occ, vis, motion = [
                 b.to(device, non_blocking=True) for b in batch]
             opt.zero_grad(set_to_none=True)
             with amp:
                 loss, parts = model.compute_losses(tokens, label, execu, ctx,
-                                                   danger, dist, occ, vis, tc)
+                                                   danger, dist, occ, vis,
+                                                   motion, tc)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
@@ -103,11 +104,12 @@ def train(args):
         agg = {}
         with torch.no_grad():
             for batch in val_loader:
-                tokens, label, execu, ctx, danger, dist, occ, vis = [
+                tokens, label, execu, ctx, danger, dist, occ, vis, motion = [
                     b.to(device) for b in batch]
                 with amp:
                     _, parts = model.compute_losses(tokens, label, execu, ctx,
-                                                    danger, dist, occ, vis, tc)
+                                                    danger, dist, occ, vis,
+                                                    motion, tc)
                 for k, v in parts.items():
                     agg[k] = agg.get(k, 0.0) + v
         va = {k: v / max(1, len(val_loader)) for k, v in agg.items()}
@@ -149,7 +151,8 @@ def evaluate(args):
     pilot = None
     if args.policy == "model":
         if args.pilot == "map":
-            pilot = MapPilot(args.checkpoint, device=device.type)
+            pilot = MapPilot(args.checkpoint, device=device.type,
+                             vo=not args.no_vo)
         else:
             pilot = Pilot(args.checkpoint, device=device.type,
                           shield=not args.no_shield)
@@ -300,6 +303,8 @@ if __name__ == "__main__":
     p.add_argument("--record", type=int, default=0, help="record first N episodes")
     p.add_argument("--record_dir", default="eval_out")
     p.add_argument("--no_shield", action="store_true")
+    p.add_argument("--no_vo", action="store_true",
+                   help="disable visual-odometry map alignment")
 
     p = sub.add_parser("viz", help="open-loop HUD over a recorded episode")
     p.add_argument("--video", required=True)

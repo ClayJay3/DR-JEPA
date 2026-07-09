@@ -191,11 +191,12 @@ class MapPilot:
     ARC_T = 2.4              # seconds of arc rollout
     ARC_DT = 0.3
 
-    def __init__(self, checkpoint, device="cuda"):
+    def __init__(self, checkpoint, device="cuda", vo=True):
         ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
         self.cfg = Config.from_dict(ckpt["config"])
         mc = self.cfg.model
         self.device = device
+        self.vo = vo             # visual-odometry map alignment
         self.model = RoverJEPA(mc).to(device)
         self.model.load_state_dict(ckpt["model"])
         self.model.eval()
@@ -227,6 +228,10 @@ class MapPilot:
         self.escape = 0
         self._last_pos = None
         self._stuck_frames = 0
+        # multi-frame perception history: (tokens, (speed, steer)) per step
+        m_off = max(self.cfg.model.frame_offsets)
+        self._tok_hist = collections.deque(maxlen=m_off + 1)
+        self._last_cmd_steer = 0.0
 
     # ---------------- pose ----------------
     def _update_pose(self, sensors):
@@ -275,7 +280,19 @@ class MapPilot:
         mc = self.cfg.model
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         tokens = self.backbone(torch.from_numpy(rgb).permute(2, 0, 1)[None])
-        occ_logit, conf_logit = self.model.map_decoder(tokens)
+        mot = (sensors["speed"] / mc.speed_norm, self._last_cmd_steer)
+        self._tok_hist.append((tokens, mot))
+
+        # multi-frame stack: current frame + lookbacks (clamped in warm-up)
+        hist = list(self._tok_hist)
+        toks, mots = [], []
+        for off in mc.frame_offsets:
+            t, m = hist[max(0, len(hist) - 1 - off)]
+            toks.append(t)
+            mots.extend(m)
+        tok_stack = torch.stack(toks, dim=1)              # (1, F, nt, fd)
+        mot_t = torch.tensor([mots], dtype=torch.float32, device=tokens.device)
+        occ_logit, conf_logit = self.model.map_decoder(tok_stack, mot_t)
         occ_logit = occ_logit[0].float().cpu().numpy()
         cl = np.clip(conf_logit[0].float().cpu().numpy(), -30.0, 30.0)
         conf = 1.0 / (1.0 + np.exp(-cl))
@@ -296,6 +313,46 @@ class MapPilot:
     #                            them down relative to free-space evidence
     DECAY = 0.9985           # per-step log-odds decay (half-life ~46 s):
     #                          phantom mass fades unless re-confirmed
+    VO_WINDOW = 2            # scan-matching search radius (cells)
+    VO_GAIN = 0.2            # fraction of the matched offset fed back to pose
+    VO_MARGIN = 10.0         # required score edge over the zero shift
+    VO_MIN_L = 1.2           # only match against well-established map cells
+
+    def _vo_align(self, ii, jj, upd, ok):
+        """Visual-odometry pose correction by scan matching.
+
+        The GPS-filtered pose drifts, so a wedge painted now can land up to
+        ~1 m off the same obstacle painted a minute ago, smearing the map.
+        Before fusing, slide the wedge over the existing map and find the
+        translation that best agrees with prior evidence (dot product of new
+        evidence with stored log-odds); feed that offset back into the pose
+        filter. GPS still anchors the absolute frame, this only removes the
+        relative drift between observations.
+        """
+        if self.recovery > 0 or self.escape > 0:
+            return                                # unreliable while thrashing
+        iv, jv, uv = ii[ok], jj[ok], upd[ok]
+        # only match where the new wedge is opinionated *positive* (obstacle
+        # structure gives the correlation peak; free space is featureless)
+        strong = uv > 0.4
+        if strong.sum() < 25:
+            return
+        iv, jv, uv = iv[strong], jv[strong], uv[strong]
+        w = self.VO_WINDOW
+        n = self.mc_cells
+        Lm = np.where(np.abs(self.L) > self.VO_MIN_L, self.L, 0.0)
+        best, best_shift, zero = -1e18, (0, 0), 0.0
+        for di in range(-w, w + 1):
+            i2 = np.clip(iv + di, 0, n - 1)
+            for dj in range(-w, w + 1):
+                j2 = np.clip(jv + dj, 0, n - 1)
+                s = float(np.dot(uv, Lm[i2, j2])) - 1.5 * (di * di + dj * dj)
+                if di == 0 and dj == 0:
+                    zero = s
+                if s > best:
+                    best, best_shift = s, (di, dj)
+        if best_shift != (0, 0) and best - zero > self.VO_MARGIN:
+            self.pose += self.VO_GAIN * np.array(best_shift) * self.res
 
     def _paint(self, occ_logit, conf):
         """Fuse one wedge into the persistent log-odds map."""
@@ -305,16 +362,26 @@ class MapPilot:
         self.L *= self.DECAY
         yaw = math.radians(self.heading)
         cy, sy = math.cos(yaw), math.sin(yaw)
-        wx = self.pose[0] + self._wx * cy + self._wz * sy
-        wz = self.pose[1] - self._wx * sy + self._wz * cy
-        ii = np.floor((wx - self.map_corner[0]) / self.res).astype(int)
-        jj = np.floor((wz - self.map_corner[1]) / self.res).astype(int)
-        ok = ((ii >= 0) & (ii < self.mc_cells) &
-              (jj >= 0) & (jj < self.mc_cells) & (conf > 0.0))
         evidence = occ_logit - self.PRIOR_LOGIT
         evidence = np.where(evidence > 0, evidence * self.POS_EVIDENCE_SCALE,
                             evidence)
         upd = np.clip(evidence, -4.0, 4.0) * conf * 0.55
+
+        def cells():
+            wx = self.pose[0] + self._wx * cy + self._wz * sy
+            wz = self.pose[1] - self._wx * sy + self._wz * cy
+            ii = np.floor((wx - self.map_corner[0]) / self.res).astype(int)
+            jj = np.floor((wz - self.map_corner[1]) / self.res).astype(int)
+            ok = ((ii >= 0) & (ii < self.mc_cells) &
+                  (jj >= 0) & (jj < self.mc_cells) & (conf > 0.0))
+            return ii, jj, ok
+
+        ii, jj, ok = cells()
+        if self.vo:
+            pose_before = self.pose.copy()
+            self._vo_align(ii, jj, upd, ok)
+            if not np.array_equal(pose_before, self.pose):
+                ii, jj, ok = cells()          # repaint at the corrected pose
         np.add.at(self.L, (ii[ok], jj[ok]), upd[ok])
         # positive cap below negative cap: occupied belief must stay
         # revisable when later evidence disagrees
@@ -551,10 +618,19 @@ class MapPilot:
         best = int(np.argmax(score))
         steer = float(steers[best])
 
-        v_clear = np.clip(clear[best] / 3.5, 0.5, 1.0)
+        v_clear = np.clip(clear[best] / 3.5, 0.35, 1.0)
         v_turn = 1.0 - 0.4 * abs(steer)
         v_goal = np.clip(goal_d / 8.0, 0.3, 1.0)
         throttle = float(np.clip(min(v_clear, v_turn, v_goal), 0.25, 1.0))
+        # thread tight passages slowly: with 200 ms actuation latency and
+        # steering lag, speed is what turns a near-miss into a graze
+        if hasattr(self, "_wedge_dist"):
+            ci = self.wc // 2
+            ahead = float(self._wedge_dist[ci - 3:ci + 4, :8].min())
+            if ahead < 2.0:
+                throttle = min(throttle, 0.35)
+            elif ahead < 3.5:
+                throttle = min(throttle, 0.55)
         if danger > 0.65:
             throttle = min(throttle, 0.4)
         self.prev_steer = steer
@@ -570,6 +646,7 @@ class MapPilot:
             self._replan()
         throttle, steer = self._control(danger, sensors["speed"])
         self.step_i += 1
+        self._last_cmd_steer = steer
         return {"throttle": throttle, "steer": steer, "danger": danger,
                 "risk": None, "path": self.path}
 

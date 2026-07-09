@@ -205,6 +205,7 @@ class SeqDataset(Dataset):
                         m[:S, COSB], m[:S, SPEED]], axis=1)
         danger = m[:, DANGER:DANGER + 1]
         dist = m[:, DIST:DIST + 1]
+        motion = np.stack([m[:, SPEED], m[:, ESTEER]], axis=1)
         occ = np.unpackbits(self.occ[s0:s0 + W], axis=-1)
         occ = occ.reshape(W, C, C).astype(np.float32)
         vis = np.unpackbits(self.vis[s0:s0 + W], axis=-1)
@@ -217,4 +218,5 @@ class SeqDataset(Dataset):
                 torch.from_numpy(danger.astype(np.float32)),
                 torch.from_numpy(dist.astype(np.float32)),
                 torch.from_numpy(occ),
-                torch.from_numpy(vis))
+                torch.from_numpy(vis),
+                torch.from_numpy(motion.astype(np.float32)))
