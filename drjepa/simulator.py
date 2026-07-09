@@ -423,8 +423,19 @@ def _jittered_box(rng, w, h, d, jitter):
     return v
 
 
+# Drive-over rule: obstacles shorter than these heights (m above ground)
+# render normally but carry NO hitbox -- the real rover rolls straight over
+# curb-sized rocks and crushes small shrubs, so they must not count as
+# contacts, appear in GT occupancy, or be avoided by the expert.
+DRIVEOVER_ROCK_H = 0.25    # ~wheel radius: rocks below this are traversable
+DRIVEOVER_BUSH_H = 0.45    # small vegetation compresses under the chassis
+
+
 def make_rock(rng, x, z, scale, terrain, style, kind="rock"):
-    """Irregular boulder mesh seated on the terrain; collision radius ~ size."""
+    """Irregular boulder mesh seated on the terrain; collision radius ~ size.
+
+    Rocks whose peak sits below DRIVEOVER_ROCK_H get radius 0 (visible
+    ground detail, no collision)."""
     w = scale * rng.uniform(0.8, 1.3)
     d = scale * rng.uniform(0.8, 1.3)
     h = scale * rng.uniform(0.5, 0.9)
@@ -433,7 +444,7 @@ def make_rock(rng, x, z, scale, terrain, style, kind="rock"):
     v += np.array([x, y0, z])
     base = style.rock_color * rng.uniform(0.82, 1.18)
     colors = [base * rng.uniform(0.92, 1.08) for _ in _BOX_FACES]
-    radius = 0.55 * max(w, d)
+    radius = 0.55 * max(w, d) if 0.88 * h >= DRIVEOVER_ROCK_H else 0.0
     return Obstacle(x, z, radius, kind, v, _BOX_FACES, colors, style)
 
 
@@ -457,24 +468,28 @@ def make_tree(rng, x, z, scale, terrain, style):
 
 
 def make_bush(rng, x, z, scale, terrain, style):
-    """Low ground-hugging shrub (a jittered canopy without a trunk)."""
+    """Low ground-hugging shrub (a jittered canopy without a trunk).
+
+    Shrubs shorter than DRIVEOVER_BUSH_H get radius 0 (crushable)."""
     w = scale * rng.uniform(0.9, 1.5)
     h = scale * rng.uniform(0.5, 0.9)
     v = _jittered_box(rng, w, h, w, 0.35)
     v += np.array([x, terrain.height(x, z) - 0.08 * h, z])
     cc = style.canopy_color * rng.uniform(0.7, 1.1)
     colors = [cc * rng.uniform(0.85, 1.15) for _ in _BOX_FACES]
-    return Obstacle(x, z, 0.5 * w, "bush", v, _BOX_FACES, colors, style)
+    radius = 0.5 * w if 0.92 * h >= DRIVEOVER_BUSH_H else 0.0
+    return Obstacle(x, z, radius, "bush", v, _BOX_FACES, colors, style)
 
 
 def make_clutter(rng, x, z, terrain, style):
     """Tiny non-colliding pebbles/tufts for ground texture and parallax."""
     s = rng.uniform(0.08, 0.35)
     if rng.random() < 0.6:
-        return make_rock(rng, x, z, s, terrain, style, kind="clutter")
-    o = make_bush(rng, x, z, s, terrain, style)
-    o.kind = "clutter"
-    o.radius = 0.0
+        o = make_rock(rng, x, z, s, terrain, style, kind="clutter")
+    else:
+        o = make_bush(rng, x, z, s, terrain, style)
+        o.kind = "clutter"
+    o.radius = 0.0     # clutter never collides, whatever its shape
     return o
 
 
