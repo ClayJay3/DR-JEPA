@@ -10,3 +10,4 @@ python live_inference_test.py --checkpoint runs/best.pth
 python live_inference_test.py --checkpoint runs/best.pth --headless --frames 3000
 python fsd_viz.py --checkpoint runs/best.pth --frames 900 --output_video fsd_demo.mp4
 python fsd_viz.py --checkpoint runs/best.pth --scenario wall --seed 1029 --frames 500 --output_video fsd_wall.mp4 --show
+python fsd_viz.py --checkpoint runs/best.pth --width 960 --height 540 --tweens 1 --show   # fast preview

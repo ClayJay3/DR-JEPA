@@ -58,9 +58,11 @@ class FSDRenderer:
     TD_SPAN = 150.0             # top-down source coverage (m)
     TD_PX = 4.0                 # px per metre in top-down source
 
-    def __init__(self, pilot, size=(1280, 720)):
+    def __init__(self, pilot, size=(1280, 720), tweens=None):
         self.pilot = pilot
         self.W, self.H = size
+        if tweens is not None:
+            self.TWEENS = max(1, int(tweens))
         self.f = 0.5 * self.W / math.tan(math.radians(self.FOV / 2))
         self.cx, self.cy = self.W / 2.0, self.H * 0.44
         self.trail = collections.deque(maxlen=4000)
@@ -68,6 +70,11 @@ class FSDRenderer:
         self._prev = None       # (pose, heading) of previous control step
         self.t = 0.0
         self._sky = self._make_sky()
+        # static radial fade of the top-down source (soft belief horizon)
+        n = int(self.TD_SPAN * self.TD_PX)
+        yy, xx = np.mgrid[0:n, 0:n].astype(np.float32)
+        r = np.sqrt((xx - n / 2) ** 2 + (yy - n / 2) ** 2) / (n / 2)
+        self._td_alpha = np.clip((1.05 - r) * 2.2, 0, 1)
 
     # ------------------------------------------------------------------
     def _make_sky(self):
@@ -108,7 +115,6 @@ class FSDRenderer:
         n = int(self.TD_SPAN * self.TD_PX)
         img = np.zeros((n, n, 3), np.uint8)
         img[:] = GROUND_UNKNOWN
-        alpha = np.zeros((n, n), np.float32)
 
         # world->pixel: px = (x - x0)*s ; py = (z0 - z)*s   (north up)
         s = self.TD_PX
@@ -187,11 +193,8 @@ class FSDRenderer:
                    max(2, int(rr * (0.35 + 0.25 * math.sin(self.t * 3)))),
                    GOAL_COL, 1, cv2.LINE_AA)
 
-        # radial edge fade -> soft horizon when warped
-        yy, xx = np.mgrid[0:n, 0:n].astype(np.float32)
-        r = np.sqrt((xx - n / 2) ** 2 + (yy - n / 2) ** 2) / (n / 2)
-        alpha[:] = np.clip((1.05 - r) * 2.2, 0, 1)
-        return img, alpha, (x0, z0, s)
+        # radial edge fade -> soft horizon when warped (precomputed)
+        return img, self._td_alpha, (x0, z0, s)
 
     # ------------------------------------------------------------------
     def _ground_homography(self, anchor, pos, R):
@@ -285,14 +288,19 @@ class FSDRenderer:
             return np.array([pose[0] + px * c + pz * s, 0,
                              pose[1] - px * s + pz * c])
 
-        # grounding shadow
+        # grounding shadow (blend only inside its bounding box)
         sh = [rot(px, pz) for px, pz in
               [(-0.8, -1.1), (0.8, -1.1), (0.8, 1.1), (-0.8, 1.1)]]
         suv, sz = self._project(np.array(sh), pos, R)
         if sz.min() > 0.5:
-            over = canvas.copy()
-            cv2.fillPoly(over, [suv.astype(np.int32)], (6, 4, 2), cv2.LINE_AA)
-            cv2.addWeighted(over, 0.55, canvas, 0.45, 0, dst=canvas)
+            pts = suv.astype(np.int32)
+            x0, y0 = np.clip(pts.min(0), 0, [self.W - 1, self.H - 1])
+            x1, y1 = np.clip(pts.max(0) + 1, 1, [self.W, self.H])
+            if x1 > x0 and y1 > y0:
+                roi = canvas[y0:y1, x0:x1]
+                over = roi.copy()
+                cv2.fillPoly(over, [pts - [x0, y0]], (6, 4, 2), cv2.LINE_AA)
+                cv2.addWeighted(over, 0.55, roi, 0.45, 0, dst=roi)
 
         body = [(-0.55, -0.8), (0.55, -0.8), (0.55, 0.8), (-0.55, 0.8)]
         hgt = 0.5
@@ -332,10 +340,10 @@ class FSDRenderer:
     # ------------------------------------------------------------------
     # HUD widgets
     def _panel(self, canvas, x, y, w, h, alpha=0.62):
-        roi = canvas[y:y + h, x:x + w].astype(np.float32)
-        canvas[y:y + h, x:x + w] = (roi * (1 - alpha) +
-                                    np.array(HUD_PANEL, np.float32) * alpha
-                                    ).astype(np.uint8)
+        roi = canvas[y:y + h, x:x + w]
+        fill = np.empty_like(roi)
+        fill[:] = HUD_PANEL
+        cv2.addWeighted(roi, 1 - alpha, fill, alpha, 0, dst=roi)
         cv2.rectangle(canvas, (x, y), (x + w, y + h), (70, 56, 38), 1,
                       cv2.LINE_AA)
 
@@ -425,8 +433,7 @@ class FSDRenderer:
             edge = np.zeros_like(canvas)
             cv2.rectangle(edge, (0, 0), (W - 1, H - 1), DANGER_COL, 24)
             edge = cv2.GaussianBlur(edge, (61, 61), 0)
-            canvas[:] = np.clip(canvas.astype(np.float32) +
-                                edge * (0.5 * k * pulse), 0, 255).astype(np.uint8)
+            cv2.addWeighted(canvas, 1.0, edge, 0.5 * k * pulse, 0, dst=canvas)
 
     def _minimap(self, size):
         p = self.pilot
@@ -500,21 +507,18 @@ class FSDRenderer:
             self.cam_yaw += dyaw * 0.10
             posR = self._cam(tw_pose, tw_head)
 
-            canvas = self._sky.copy()
             Hm = self._ground_homography(anchor, *posR)
             warped = cv2.warpPerspective(td, Hm, (self.W, self.H))
             wa = cv2.warpPerspective(td_alpha, Hm, (self.W, self.H))
-            wa3 = wa[..., None]
-            canvas = (canvas.astype(np.float32) * (1 - wa3) +
-                      warped.astype(np.float32) * wa3).astype(np.uint8)
+            # SIMD uint8 per-pixel alpha blend (no float round trips)
+            canvas = cv2.blendLinear(warped, self._sky, wa, 1.0 - wa)
 
             glow = np.zeros_like(canvas)
             self._draw_beacon(canvas, glow, posR)
             self._draw_boxes(canvas, self._boxes_cache, tw_pose, posR)
             self._draw_rover(canvas, tw_pose, tw_head, posR)
             glow = cv2.GaussianBlur(glow, (41, 41), 0)
-            canvas = np.clip(canvas.astype(np.float32) + glow * 0.85,
-                             0, 255).astype(np.uint8)
+            cv2.addWeighted(canvas, 1.0, glow, 0.85, 0, dst=canvas)
 
             self._hud(canvas, sim_frame, out, sensors)
             frames.append(canvas)
@@ -546,17 +550,21 @@ def main():
     ap.add_argument("--output_video", default="fsd_demo.mp4")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
+    ap.add_argument("--tweens", type=int, default=3,
+                    help="video frames per control step (1 = fast preview "
+                         "at 10 fps, 3 = smooth 30 fps)")
     ap.add_argument("--show", action="store_true", help="also open a window")
     args = ap.parse_args()
 
     pilot = MapPilot(args.checkpoint)
     sim = RoverSim(SimConfig(), scenario=args.scenario, seed=args.seed)
-    renderer = FSDRenderer(pilot, size=(args.width, args.height))
+    renderer = FSDRenderer(pilot, size=(args.width, args.height),
+                           tweens=args.tweens)
     writer = cv2.VideoWriter(args.output_video, cv2.VideoWriter_fourcc(*"mp4v"),
-                             10.0 * FSDRenderer.TWEENS,
+                             10.0 * renderer.TWEENS,
                              (args.width, args.height))
     print(f"Rendering {args.frames} control steps -> {args.output_video} "
-          f"({10 * FSDRenderer.TWEENS} fps, q to quit)")
+          f"({10 * renderer.TWEENS} fps, q to quit)")
     goals = 0
     for n in range(args.frames):
         frame = sim.render()

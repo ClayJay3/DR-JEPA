@@ -135,7 +135,9 @@ python live_inference_test.py --checkpoint runs/best.pth
 
 # 5b. cinematic FSD-style visualization of the belief world (30 fps video):
 #     obstacles, route ribbon, goal beacon, neural wedge, memory map -- all
-#     rendered from what the MODEL believes, never from ground truth
+#     rendered from what the MODEL believes, never from ground truth.
+#     Renders ~2x faster than real time at full quality; use --tweens 1
+#     and/or --width 960 --height 540 for an even faster preview.
 python fsd_viz.py --checkpoint runs/best.pth --frames 900 --output_video fsd_demo.mp4
 
 # 6. open-loop HUD over a recorded episode
