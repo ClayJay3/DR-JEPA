@@ -60,6 +60,17 @@ def _episode_meta(df, cfg: Config):
 
 def preprocess(data_dir, out_dir, cfg: Config = None, batch_size=160,
                device="cuda"):
+    """Pack raw episodes into training-ready memory-mapped arrays.
+
+    For every (video, csv) pair found in the comma-separated `data_dir`
+    list: decode frames, run the frozen DINOv2 backbone once per frame, and
+    store per-frame token grids (fp16), per-frame context/label metadata,
+    and the bit-packed occupancy/visibility wedge targets from the episode
+    .npz (zeros when absent, e.g. real logs without geometry labels).
+
+    Because the backbone is frozen this is the ONLY time pixels are
+    touched; training afterwards runs entirely from these features.
+    """
     from .model import Backbone
 
     cfg = cfg or Config()
@@ -143,6 +154,12 @@ class SeqDataset(Dataset):
     """Sliding windows of precomputed features for RoverJEPA training."""
 
     def __init__(self, data_dir, cfg: Config, is_val=False):
+        """Index sliding windows over a packed dataset.
+
+        Windows never straddle episode boundaries, the train/val split is
+        by whole episodes (seeded, deterministic -- no leakage), and DAgger
+        episodes get a reduced sampling weight.
+        """
         self.cfg = cfg
         mc = cfg.model
         self.S = mc.seq_len
@@ -189,9 +206,13 @@ class SeqDataset(Dataset):
               f"{len(self.starts)} windows")
 
     def __len__(self):
+        """Number of training windows."""
         return len(self.starts)
 
     def __getitem__(self, i):
+        """One window: tokens, labels, executed actions, context, danger,
+        goal distance, wedge occupancy/visibility targets, and ego-motion.
+        Shapes are documented in RoverJEPA.compute_losses."""
         s0 = self.starts[i]
         S, W, C = self.S, self.W, self.cells
 

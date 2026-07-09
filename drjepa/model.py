@@ -50,6 +50,7 @@ class FrameEncoder(nn.Module):
     POOL = 4
 
     def __init__(self, cfg: ModelConfig):
+        """Token projection + MLP head producing a LayerNormed embedding."""
         super().__init__()
         self.rows, self.cols = cfg.pool_rows, cfg.pool_cols
         self.norm = nn.LayerNorm(cfg.feat_dim)
@@ -63,6 +64,7 @@ class FrameEncoder(nn.Module):
         )
 
     def forward(self, tokens):
+        """(..., n_tokens, feat_dim) -> (..., embed_dim) frame embeddings."""
         lead = tokens.shape[:-2]
         t = tokens.reshape(-1, tokens.shape[-2], tokens.shape[-1])
         cls, grid = t[:, :1], t[:, 1:]
@@ -87,6 +89,7 @@ class MapDecoder(nn.Module):
     """
 
     def __init__(self, cfg: ModelConfig):
+        """Per-token projection + transposed-conv pyramid up to wedge size."""
         super().__init__()
         self.rows, self.cols = cfg.pool_rows, cfg.pool_cols
         self.cells = cfg.wedge_cells
@@ -132,6 +135,7 @@ class TemporalEncoder(nn.Module):
     """Causal transformer over frame embeddings -> belief states."""
 
     def __init__(self, cfg: ModelConfig):
+        """Pre-norm causal transformer with learned positional embeddings."""
         super().__init__()
         self.pos = nn.Parameter(torch.zeros(1, cfg.seq_len, cfg.embed_dim))
         nn.init.trunc_normal_(self.pos, std=0.02)
@@ -143,6 +147,11 @@ class TemporalEncoder(nn.Module):
         self.out_norm = nn.LayerNorm(cfg.embed_dim)
 
     def forward(self, e):
+        """Frame embeddings (B, S, E) -> belief states (B, S, E).
+
+        The causal mask means belief s_t only sees frames <= t, so training
+        beliefs match what streaming inference can actually compute.
+        """
         S = e.shape[1]
         x = e + self.pos[:, :S]
         mask = nn.Transformer.generate_square_subsequent_mask(S, device=e.device)
@@ -153,6 +162,7 @@ class JEPAPredictor(nn.Module):
     """(s_t, executed actions t..t+k-1, offset k) -> predicted e_{t+k}."""
 
     def __init__(self, cfg: ModelConfig):
+        """MLP conditioned on a learned embedding of the horizon offset k."""
         super().__init__()
         self.k_max = max(cfg.jepa_offsets)
         self.offset_emb = nn.Embedding(len(cfg.jepa_offsets), 32)
@@ -171,7 +181,15 @@ class JEPAPredictor(nn.Module):
 
 
 class RoverJEPA(nn.Module):
+    """The full trainable model: shared encoder + all task heads.
+
+    See the module docstring for the architecture diagram. Everything here
+    trains jointly in `compute_losses`; inference-side orchestration
+    (map fusion, planning, control) lives in `drjepa.pilot`.
+    """
+
     def __init__(self, cfg: ModelConfig = None):
+        """Build all submodules and the frozen EMA target encoder."""
         super().__init__()
         self.cfg = cfg = cfg or ModelConfig()
 
@@ -212,14 +230,21 @@ class RoverJEPA(nn.Module):
     # ------------------------------------------------------------------
     @torch.no_grad()
     def update_ema(self, decay):
+        """Nudge the frozen target encoder toward the online frame encoder.
+
+        The slow-moving copy provides the JEPA regression targets; without
+        it the encoder could trivially collapse to a constant embedding.
+        """
         for pt, po in zip(self.target_encoder.parameters(),
                           self.frame_encoder.parameters()):
             pt.mul_(decay).add_(po, alpha=1 - decay)
 
     def embed(self, tokens):
+        """Backbone tokens -> frame embedding e_t (online encoder)."""
         return self.frame_encoder(tokens)
 
     def belief(self, e_seq):
+        """Frame-embedding sequence -> belief-state sequence."""
         return self.temporal(e_seq)
 
     def policy_raw(self, s, ctx):
@@ -240,9 +265,12 @@ class RoverJEPA(nn.Module):
         return torch.stack([thr, steer], dim=-1)
 
     def danger(self, s):
+        """Belief state -> imminent-danger logit (sigmoid for probability)."""
         return self.danger_head(s)
 
     def predict_future(self, s, exec_actions, offset_idx):
+        """Imagine the frame embedding jepa_offsets[offset_idx] steps ahead
+        given a belief state and the actions that would be executed."""
         return self.predictor(s, exec_actions, offset_idx)
 
     # ------------------------------------------------------------------
@@ -403,6 +431,7 @@ class Backbone(nn.Module):
     IMAGENET_STD = (0.229, 0.224, 0.225)
 
     def __init__(self, cfg: ModelConfig, device="cuda"):
+        """Load the pretrained DINOv2 from torch.hub and freeze it."""
         super().__init__()
         self.cfg = cfg
         self.net = torch.hub.load("facebookresearch/dinov2", cfg.backbone)

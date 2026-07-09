@@ -23,6 +23,12 @@ class GridPlanner:
     RES = 1.5  # metres per cell
 
     def __init__(self, obs_xz, obs_rad, inflate, start, goal, margin=45.0):
+        """Rasterize the (inflated) obstacles into a grid and plan once.
+
+        `inflate` is added to every obstacle radius so the path keeps
+        rover-radius clearance; `margin` pads the grid bounds beyond the
+        start/goal bounding box so routes can swing around wide walls.
+        """
         self.goal = np.asarray(goal, float)
         lo = np.minimum(start, goal) - margin
         hi = np.maximum(start, goal) + margin
@@ -38,6 +44,7 @@ class GridPlanner:
         self.replan(start)
 
     def _build_occ(self, inflate):
+        """Occupancy grid: cells within `inflate` of any obstacle surface."""
         occ = np.zeros((self.nx, self.nz), bool)
         obs_xz, obs_rad, lo, hi = self._obs_xz, self._obs_rad, self.lo, self.hi
         if len(obs_rad):
@@ -60,15 +67,19 @@ class GridPlanner:
 
     # ---------------- helpers ----------------
     def _cell(self, p):
+        """World point -> clamped grid cell (i, j)."""
         i = int(np.clip((p[0] - self.lo[0]) / self.RES, 0, self.nx - 1))
         j = int(np.clip((p[1] - self.lo[1]) / self.RES, 0, self.nz - 1))
         return i, j
 
     def _world(self, ij):
+        """Grid cell -> world coordinates of its center."""
         return np.array([self.lo[0] + (ij[0] + 0.5) * self.RES,
                          self.lo[1] + (ij[1] + 0.5) * self.RES])
 
     def _free_near(self, ij, rmax=8):
+        """Nearest unoccupied cell (spiral search) -- start/goal may sit
+        inside the inflation ring of an obstacle."""
         if not self.occ[ij]:
             return ij
         for r in range(1, rmax):
@@ -83,6 +94,12 @@ class GridPlanner:
 
     # ---------------- A* ----------------
     def replan(self, start):
+        """8-connected A* from `start` to the goal over the occupancy grid.
+
+        If no route exists at full inflation the grid is rebuilt once with a
+        slimmer safety margin (narrow gaps can disappear under inflation).
+        Returns True and stores the path on success.
+        """
         s = self._free_near(self._cell(start))
         g = self._free_near(self._cell(self.goal))
         occ = self.occ
@@ -145,6 +162,7 @@ class GridPlanner:
         return seg[min(k + 1, len(seg) - 1)]
 
     def deviation(self, x, z):
+        """Distance (m) from the rover to the nearest stored path point."""
         if self.path is None:
             return 0.0
         w = self.path[max(0, self._wp_idx - 5):self._wp_idx + 40]
@@ -152,11 +170,18 @@ class GridPlanner:
 
 
 class ArcPlanner:
+    """Local controller: samples constant-curvature arcs, tracks the A* path.
+
+    Runs every control step. Falls back to reversing recovery (and a
+    forward-turn escape if reversing is also blocked) when boxed in.
+    """
+
     N_ARCS = 17
     HORIZON_S = 2.6
     ARC_DT = 0.26
 
     def __init__(self, sim, rng=None):
+        """Bind to a simulator (privileged access) and plan the global route."""
         self.sim = sim
         self.rng = rng or np.random.default_rng()
         self.prev_steer = 0.0
@@ -288,6 +313,7 @@ class NoiseInjector:
     """
 
     def __init__(self, rng, p_start=0.012):
+        """`p_start` is the per-step chance of starting a perturbation burst."""
         self.rng = rng
         self.p_start = p_start
         self.left = 0
@@ -295,6 +321,7 @@ class NoiseInjector:
         self.thr_scale = 1.0
 
     def apply(self, throttle, steer, clearance=99.0):
+        """Return the (possibly perturbed) command to actually execute."""
         # never perturb while squeezed close to obstacles or reversing
         if clearance < 1.5 or throttle < 0:
             self.left = 0

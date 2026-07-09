@@ -16,6 +16,7 @@ from drjepa.pilot import Pilot, MapPilot, draw_hud
 
 
 def main():
+    """Run the endless closed-loop demo and record it to a video file."""
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--pilot", choices=["map", "bc"], default="map")

@@ -27,10 +27,18 @@ from .simulator import latlon_to_meters
 
 
 class Pilot:
+    """Reactive behavior-cloned pilot (baseline; MapPilot is the navigator).
+
+    Drives directly from the belief state + goal vector with chunked
+    execution and steering hysteresis; optionally screens its action chunk
+    through the JEPA latent-MPC shield.
+    """
+
     EXEC_HORIZON = 3      # steps of each planned chunk executed before replanning
     HYSTERESIS = 0.9      # logit bonus near the previous steering decision
 
     def __init__(self, checkpoint, device="cuda", shield=True):
+        """Restore the model (architecture from the checkpoint's config)."""
         ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
         self.cfg = Config.from_dict(ckpt["config"])
         mc = self.cfg.model
@@ -53,6 +61,7 @@ class Pilot:
         self._prev_bin = None
 
     def reset(self):
+        """Clear per-episode state (call between runs)."""
         self.embeds.clear()
         self._chunk = None
         self._step_in_chunk = 0
@@ -192,6 +201,11 @@ class MapPilot:
     ARC_DT = 0.3
 
     def __init__(self, checkpoint, device="cuda", vo=True):
+        """Restore the model and precompute wedge-cell geometry.
+
+        vo=False disables the scan-matching pose correction (useful for
+        ablations; on real hardware with drifting GPS leave it on).
+        """
         ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
         self.cfg = Config.from_dict(ckpt["config"])
         mc = self.cfg.model
@@ -215,6 +229,7 @@ class MapPilot:
         self.reset()
 
     def reset(self):
+        """Wipe the map, pose filter, and histories (new run = new memory)."""
         self.embeds.clear()
         self.L = np.zeros((self.mc_cells, self.mc_cells), np.float32)
         self.origin = None       # lat/lon anchor of the local frame
@@ -237,6 +252,13 @@ class MapPilot:
 
     # ---------------- pose ----------------
     def _update_pose(self, sensors):
+        """Complementary pose filter: integrate odometry, pull toward GPS.
+
+        Odometry gives smooth short-term motion; the weak GPS correction
+        (GPS_GAIN per step) bounds the long-term drift. Also converts the
+        goal fix into the local metric frame and re-centers the map if the
+        rover nears its edge.
+        """
         if self.origin is None:
             self.origin = (sensors["lat"], sensors["lon"])
         gx, gz = latlon_to_meters(sensors["lat"], sensors["lon"], *self.origin)
@@ -372,6 +394,7 @@ class MapPilot:
         self.last_conf = conf
 
         def cells():
+            """Wedge cell centers -> map indices at the CURRENT pose."""
             wx = self.pose[0] + self._wx * cy + self._wz * sy
             wz = self.pose[1] - self._wx * sy + self._wz * cy
             ii = np.floor((wx - self.map_corner[0]) / self.res).astype(int)
@@ -411,6 +434,14 @@ class MapPilot:
         return i0, j0, i1, j1
 
     def _replan(self):
+        """Plan a route to the goal over the believed map.
+
+        Builds a costmap from the fused occupancy (soft cost rising with
+        probability + inflation from the distance field, small penalty for
+        unknown space) and runs weighted A* on a 2x-downsampled window.
+        Falls back to a slimmer lethal radius if the map claims no route
+        exists -- the map can be wrong, the planner should not deadlock.
+        """
         i0, j0, i1, j1 = self._plan_window()
         L = self.L[i0:i1, j0:j1]
         prob = 1.0 / (1.0 + np.exp(-L))
@@ -432,6 +463,7 @@ class MapPilot:
         cost = 1.0 + 6.0 * p2 + np.where(d2 < 2.0, (2.0 - d2) * 2.0, 0.0)
 
         def to_cell(p):
+            """World point -> clamped planning-grid cell."""
             return (int(np.clip((p[0] - self.map_corner[0]) / self.res - i0, 0,
                                 ph * 2 - 1) // 2),
                     int(np.clip((p[1] - self.map_corner[1]) / self.res - j0, 0,
@@ -453,6 +485,12 @@ class MapPilot:
 
     @staticmethod
     def _astar(cost, lethal, start, goal, shape):
+        """Weighted A* (heuristic x1.4) over an 8-connected cost grid.
+
+        The inflated heuristic trades a slightly suboptimal path for far
+        fewer expansions; an expansion cap bounds worst-case latency.
+        Returns the cell path or None.
+        """
         h, w = shape
         if lethal[start]:
             lethal = lethal.copy()
@@ -524,6 +562,15 @@ class MapPilot:
 
     # ---------------- local control ----------------
     def _control(self, danger, v_meas):
+        """Local controller: track the A* path with believed-map arc checks.
+
+        Mirrors the expert's arc sampler but every clearance lookup goes
+        through the fused map + the zero-lag fresh-wedge guard instead of
+        ground truth. Handles creep-through-gaps, reversing recovery, and
+        speed governance (clearance, turn sharpness, goal proximity, gap
+        width, and the learned danger probability all cap throttle).
+        Returns (throttle, steer).
+        """
         # waypoint ~7 m ahead on the A* path (or the goal directly)
         target = self.goal
         if self.path is not None and len(self.path) > 1:
@@ -674,6 +721,7 @@ class MapPilot:
                                   120 + 135 * occ_v[occ_mask]], axis=-1)
         # rover + goal + path markers
         def mark(p, col):
+            """Small square marker at a world position on the map view."""
             i = int((p[0] - self.map_corner[0]) / self.res) - i0
             j = int((p[1] - self.map_corner[1]) / self.res) - j0
             if 0 <= i < img.shape[0] and 0 <= j < img.shape[1]:
@@ -694,6 +742,9 @@ class MapPilot:
 # ==========================================================================
 def draw_hud(frame, throttle, steer, danger, risk=None, dist=None,
              ref=None, extra=None):
+    """Overlay a compact telemetry HUD (danger bar, steering needle,
+    throttle bar, labels) onto a camera frame. Used by eval recordings,
+    the live test, and the open-loop viz."""
     h, w = frame.shape[:2]
     # danger bar
     cv2.rectangle(frame, (10, 10), (10 + int(120 * min(danger, 1.0)), 26),

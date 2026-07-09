@@ -34,12 +34,14 @@ _PILOT = None   # lazy per-worker model pilot (DAgger mode)
 
 
 def _init_worker(args):
+    """Pool initializer: share CLI args; single-threaded OpenCV per worker."""
     global _ARGS
     _ARGS = args
     cv2.setNumThreads(0)
 
 
 def _get_pilot():
+    """Lazily build one model pilot per worker (DAgger mode only)."""
     global _PILOT
     if _PILOT is None:
         from drjepa.pilot import Pilot
@@ -48,6 +50,14 @@ def _get_pilot():
 
 
 def generate_episode(ep_id):
+    """Simulate one episode and write its video + CSV + wedge-GT npz.
+
+    Per frame, in order: render the camera, read the noisy sensors, compute
+    the wedge ground truth, query the expert for the clean action LABEL,
+    pick the EXECUTED action (noise-injected expert, or the model itself in
+    DAgger mode), log the row, then step the physics. Frame t therefore
+    always pairs with the command chosen at frame t.
+    """
     args = _ARGS
     seed = args.seed + ep_id
     sim = RoverSim(SimConfig(), scenario=args.scenario, seed=seed)
@@ -123,6 +133,7 @@ def generate_episode(ep_id):
 
 
 def main():
+    """Parse args, run the worker pool, print the dataset summary table."""
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--episodes", type=int, default=300)
     ap.add_argument("--output", default="data_synth")

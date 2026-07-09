@@ -46,10 +46,19 @@ DANGER_COL = (70, 70, 255)
 
 def _put(img, text, org, scale=0.5, col=HUD_TEXT, thick=1,
          font=cv2.FONT_HERSHEY_DUPLEX):
+    """Anti-aliased text helper with the HUD's default styling."""
     cv2.putText(img, text, org, font, scale, col, thick, cv2.LINE_AA)
 
 
 class FSDRenderer:
+    """Composites one cinematic frame of the pilot's belief world.
+
+    Pipeline per video frame: sky gradient -> homography-warped top-down
+    belief layer (explored ground, grid, trail, route ribbon, goal ring)
+    -> 3D obstacle boxes / rover / goal beacon -> glow pass -> HUD insets
+    (camera PiP, neural wedge, memory minimap, drive cluster).
+    """
+
     TWEENS = 3                  # video frames per control step (10 -> 30 fps)
     CAM_BACK = 9.0              # chase camera offset (m)
     CAM_UP = 4.6
@@ -59,6 +68,7 @@ class FSDRenderer:
     TD_PX = 4.0                 # px per metre in top-down source
 
     def __init__(self, pilot, size=(1280, 720), tweens=None):
+        """Bind to a MapPilot and precompute static layers (sky, fade)."""
         self.pilot = pilot
         self.W, self.H = size
         if tweens is not None:
@@ -78,6 +88,7 @@ class FSDRenderer:
 
     # ------------------------------------------------------------------
     def _make_sky(self):
+        """Static dark sky gradient with a soft haze band at the horizon."""
         g = (np.linspace(0, 1, self.H) ** 1.6)[:, None, None]
         img = BG_TOP[None, None] * (1 - g) + BG_HOR[None, None] * g
         # soft haze band just above the horizon line
@@ -89,6 +100,8 @@ class FSDRenderer:
     # ------------------------------------------------------------------
     # camera helpers (world: x east, z north, y up; screen: u right, v down)
     def _cam(self, pose, heading):
+        """Chase-camera pose: behind/above the rover, pitched down, using
+        the lazily-smoothed cam_yaw for a cinematic swing through turns."""
         yaw = math.radians(self.cam_yaw)
         fwd = np.array([math.sin(yaw), 0.0, math.cos(yaw)])
         pos = np.array([pose[0], 0.0, pose[1]]) - fwd * self.CAM_BACK
@@ -102,6 +115,7 @@ class FSDRenderer:
         return pos, R
 
     def _project(self, pts, pos, R):
+        """World points -> (pixel uv, camera depth z)."""
         c = (pts - pos) @ R
         z = np.maximum(c[..., 2], 1e-3)
         u = c[..., 0] / z * self.f + self.cx
@@ -111,6 +125,13 @@ class FSDRenderer:
     # ------------------------------------------------------------------
     # top-down belief source (world-anchored; warped onto the ground plane)
     def _topdown(self, pose):
+        """Build the world-anchored top-down belief layer for this step.
+
+        Everything painted here (explored ground, grid, trail, animated
+        route ribbon, committed arc, goal ring) lands on the 3D ground
+        plane via a single homography warp -- one image, pixel-smooth
+        perspective for free. Returns (image, edge-fade alpha, anchor).
+        """
         p = self.pilot
         n = int(self.TD_SPAN * self.TD_PX)
         img = np.zeros((n, n, 3), np.uint8)
@@ -122,6 +143,7 @@ class FSDRenderer:
         z0 = pose[1] + self.TD_SPAN / 2
 
         def to_px(w):
+            """World (x, z) -> top-down pixel coordinates (north up)."""
             w = np.asarray(w, np.float32).reshape(-1, 2)
             return np.stack([(w[:, 0] - x0) * s, (z0 - w[:, 1]) * s], -1)
 
@@ -240,6 +262,8 @@ class FSDRenderer:
         return boxes
 
     def _draw_boxes(self, canvas, boxes, pose, posR):
+        """Render belief objects as shaded 3D boxes with luminous top edges
+        (painter-sorted between and within boxes; distance-faded fill)."""
         pos, R = posR
         fwd = R[:, 2]
         queue = []
@@ -280,11 +304,14 @@ class FSDRenderer:
 
     # ------------------------------------------------------------------
     def _draw_rover(self, canvas, pose, heading, posR):
+        """Low-poly rover model: grounding shadow, shaded body box, and an
+        amber heading chevron on the roof."""
         pos, R = posR
         yaw = math.radians(heading)
         c, s = math.cos(yaw), math.sin(yaw)
 
         def rot(px, pz):
+            """Rover-frame (right, forward) offset -> world 3D point."""
             return np.array([pose[0] + px * c + pz * s, 0,
                              pose[1] - px * s + pz * c])
 
@@ -324,6 +351,7 @@ class FSDRenderer:
 
     # ------------------------------------------------------------------
     def _draw_beacon(self, canvas, glow, posR):
+        """Vertical pulsing light pillar at the goal (core + glow pass)."""
         pos, R = posR
         g = self.pilot.goal
         base = np.array([g[0], 0.0, g[1]])
@@ -340,6 +368,7 @@ class FSDRenderer:
     # ------------------------------------------------------------------
     # HUD widgets
     def _panel(self, canvas, x, y, w, h, alpha=0.62):
+        """Semi-transparent dark HUD panel with a thin border."""
         roi = canvas[y:y + h, x:x + w]
         fill = np.empty_like(roi)
         fill[:] = HUD_PANEL
@@ -348,6 +377,8 @@ class FSDRenderer:
                       cv2.LINE_AA)
 
     def _hud(self, canvas, sim_frame, out, sensors):
+        """Draw all 2D overlays: camera PiP, neural-wedge panel, memory
+        minimap, status panel, drive cluster, and the danger vignette."""
         p = self.pilot
         W, H = self.W, self.H
 
@@ -436,6 +467,9 @@ class FSDRenderer:
             cv2.addWeighted(canvas, 1.0, edge, 0.5 * k * pulse, 0, dst=canvas)
 
     def _minimap(self, size):
+        """North-up overview of the ENTIRE persistent map: explored space,
+        obstacle beliefs, driven trail, planned route, rover and goal.
+        Auto-zooms to the explored extent."""
         p = self.pilot
         # auto-zoom to the explored extent (plus goal), min 70 m span
         ex = np.array(self.trail) if len(self.trail) > 1 else p.pose[None]
@@ -458,6 +492,7 @@ class FSDRenderer:
         img = np.ascontiguousarray(np.flipud(img))
 
         def mark(w, col, r=2):
+            """Dot marker at a world position on the minimap."""
             i = int((w[0] - p.map_corner[0]) / p.res) - i0
             j = int((w[1] - p.map_corner[1]) / p.res) - j0
             if 0 <= i < img.shape[1] and 0 <= j < img.shape[0]:
@@ -527,7 +562,8 @@ class FSDRenderer:
 
     @property
     def _boxes_cache(self):
-        # recompute at most once per control step
+        """Obstacle boxes recomputed at most once per control step (the
+        map only changes between steps, not between tween frames)."""
         if getattr(self, "_bc_step", -1) != self.pilot.step_i:
             self._bc = self._obstacle_boxes(self.pilot.pose)
             self._bc_step = self.pilot.step_i
@@ -538,6 +574,7 @@ class FSDRenderer:
 # Standalone run loop
 # ==========================================================================
 def main():
+    """Drive the MapPilot through an endless world and record the FSD view."""
     from drjepa.simulator import RoverSim, SimConfig
     from drjepa.pilot import MapPilot
 

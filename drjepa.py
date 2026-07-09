@@ -30,6 +30,15 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # TRAIN
 # ==========================================================================
 def train(args):
+    """Train RoverJEPA on a packed dataset.
+
+    AdamW + cosine schedule with warmup, bf16 autocast, per-step EMA update
+    of the JEPA target encoder, weighted sampling when DAgger episodes are
+    present. Checkpoints are selected on validation MAP loss (perception
+    drives navigation; the BC heads overfit earlier and must not veto a
+    better perception epoch). Saves best.pth / latest.pth with the full
+    config embedded.
+    """
     from drjepa.model import RoverJEPA
 
     cfg = Config()
@@ -67,6 +76,7 @@ def train(args):
     total_steps = tc.epochs * steps_per_epoch
 
     def lr_lambda(step):
+        """Linear warmup then cosine decay to min_lr."""
         if step < warmup:
             return (step + 1) / warmup
         p = (step - warmup) / max(1, total_steps - warmup)
@@ -146,6 +156,14 @@ def train(args):
 # CLOSED-LOOP EVAL
 # ==========================================================================
 def evaluate(args):
+    """Closed-loop evaluation over fresh randomized worlds.
+
+    Drives N seeded episodes with the chosen policy (map pilot, BC pilot,
+    or the privileged expert) and reports success rate, collision-free
+    rate, contact events, and SPL (success-weighted path efficiency).
+    Optionally records the first episodes as HUD videos; the full
+    per-episode table is written to results_<policy>.json.
+    """
     import cv2
     from drjepa.simulator import RoverSim, SimConfig
     from drjepa.expert import ArcPlanner
@@ -244,6 +262,8 @@ def evaluate(args):
 # OPEN-LOOP VIZ
 # ==========================================================================
 def visualize(args):
+    """Open-loop HUD over one recorded episode: replay the video, run the
+    model per frame, and overlay its outputs next to the logged actions."""
     import cv2
     import pandas as pd
     from drjepa.simulator import goal_vector

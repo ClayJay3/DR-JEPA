@@ -36,6 +36,7 @@ def meters_to_latlon(x, z, origin_lat, origin_lon):
 
 
 def latlon_to_meters(lat, lon, origin_lat, origin_lon):
+    """GPS degrees -> local metres (x=east, z=north) about an origin fix."""
     z = (lat - origin_lat) * M_PER_DEG
     x = (lon - origin_lon) * M_PER_DEG * math.cos(math.radians(origin_lat))
     return x, z
@@ -126,6 +127,7 @@ class EpisodeStyle:
     """One bag of appearance/dynamics randomization, drawn per episode."""
 
     def __init__(self, rng: np.random.Generator):
+        """Sample every appearance/dynamics parameter for one episode."""
         self.ground_a, self.ground_b = [np.array(c, float) for c in
                                         _GROUND_PALETTES[rng.integers(len(_GROUND_PALETTES))]]
         self.rock_color = np.array(_ROCK_PALETTES[rng.integers(len(_ROCK_PALETTES))], float)
@@ -163,7 +165,14 @@ class EpisodeStyle:
 # Terrain heightfield
 # ==========================================================================
 class Terrain:
+    """Rolling heightfield built from a small sum of random sinusoids.
+
+    Cheap to evaluate anywhere (no grid storage), smooth enough for the
+    camera pitch/roll to follow, and different every episode.
+    """
+
     def __init__(self, rng: np.random.Generator, amp: float, wavelen: float):
+        """Draw random directions, wavelengths, and phases for 4 waves."""
         n = 4
         ang = rng.uniform(0, 2 * np.pi, n)
         wl = wavelen * rng.uniform(0.6, 1.6, n)
@@ -180,6 +189,7 @@ class Terrain:
         return h if h.shape else float(h)
 
     def slope(self, x, z, d=0.75):
+        """Finite-difference terrain gradient (dh/dx, dh/dz) at a point."""
         hx = (self.height(x + d, z) - self.height(x - d, z)) / (2 * d)
         hz = (self.height(x, z + d) - self.height(x, z - d)) / (2 * d)
         return hx, hz
@@ -195,6 +205,8 @@ class Obstacle:
                  "face_colors", "face_normals", "face_centers", "bound_r", "center")
 
     def __init__(self, x, z, radius, kind, verts, faces, base_colors, style):
+        """Bake lambertian shading per face (the sun is fixed within an
+        episode, so face colors are computed once at build time)."""
         self.x, self.z, self.radius, self.kind = x, z, radius, kind
         self.verts = verts
         self.faces = faces
@@ -228,6 +240,7 @@ _BOX_FACES = [np.array(f) for f in
 
 
 def _jittered_box(rng, w, h, d, jitter):
+    """Box vertices with random per-vertex jitter -> irregular rock-like hull."""
     hw, hd = w / 2, d / 2
     v = np.array([[-hw, 0, -hd], [hw, 0, -hd], [hw, 0, hd], [-hw, 0, hd],
                   [-hw, h, -hd], [hw, h, -hd], [hw, h, hd], [-hw, h, hd]], float)
@@ -236,6 +249,7 @@ def _jittered_box(rng, w, h, d, jitter):
 
 
 def make_rock(rng, x, z, scale, terrain, style, kind="rock"):
+    """Irregular boulder mesh seated on the terrain; collision radius ~ size."""
     w = scale * rng.uniform(0.8, 1.3)
     d = scale * rng.uniform(0.8, 1.3)
     h = scale * rng.uniform(0.5, 0.9)
@@ -249,6 +263,7 @@ def make_rock(rng, x, z, scale, terrain, style, kind="rock"):
 
 
 def make_tree(rng, x, z, scale, terrain, style):
+    """Trunk + jittered canopy; collision radius follows the thin trunk."""
     y0 = terrain.height(x, z)
     trunk_h = scale * rng.uniform(1.2, 2.2)
     trunk_w = 0.12 * scale * rng.uniform(0.8, 1.4)
@@ -267,6 +282,7 @@ def make_tree(rng, x, z, scale, terrain, style):
 
 
 def make_bush(rng, x, z, scale, terrain, style):
+    """Low ground-hugging shrub (a jittered canopy without a trunk)."""
     w = scale * rng.uniform(0.9, 1.5)
     h = scale * rng.uniform(0.5, 0.9)
     v = _jittered_box(rng, w, h, w, 0.35)
@@ -291,7 +307,14 @@ def make_clutter(rng, x, z, terrain, style):
 # Render engine
 # ==========================================================================
 class Camera:
+    """Pinhole camera: world -> camera-frame -> pixel projection.
+
+    Conventions: world x=east, y=up, z=north; camera X=right, Y=up,
+    Z=forward; yaw is compass-style (0 = north, positive clockwise).
+    """
+
     def __init__(self, w, h, fov_deg):
+        """Derive focal length from image width and horizontal FOV."""
         self.W, self.H = w, h
         self.cx, self.cy = w / 2.0, h / 2.0
         self.f = (w / 2.0) / math.tan(math.radians(fov_deg / 2.0))
@@ -310,9 +333,11 @@ class Camera:
         return np.stack([right, up, fwd], axis=1)
 
     def to_cam(self, pts, cam_pos, R):
+        """World points (N, 3) -> camera-frame points given rotation R."""
         return (pts - cam_pos) @ R
 
     def project(self, pts_cam):
+        """Camera-frame points -> pixel (u, v); caller must handle z<=0."""
         z = np.maximum(pts_cam[..., 2], 1e-6)
         u = pts_cam[..., 0] / z * self.f + self.cx
         v = self.cy - pts_cam[..., 1] / z * self.f
@@ -334,8 +359,17 @@ class Camera:
 
 
 class Renderer:
+    """Painter's-algorithm rasterizer for the synthetic camera.
+
+    Draws, far to near: sky gradient, hazy far-ground rings, sun disc,
+    depth-sorted terrain quads and obstacle faces (lambertian shading +
+    distance fog), then applies camera post-processing (motion blur,
+    exposure/white-balance, vignette, sensor noise).
+    """
+
     def __init__(self, cfg: SimConfig, style: EpisodeStyle, terrain: Terrain,
                  rng: np.random.Generator):
+        """Precompute the static sky, vignette mask, and ground-noise field."""
         self.cfg = cfg
         self.style = style
         self.terrain = terrain
@@ -352,18 +386,21 @@ class Renderer:
 
     # ---------------- static layers ----------------
     def _make_sky(self):
+        """Vertical zenith->horizon gradient image for the episode's sky."""
         h = self.cfg.img_h
         t = (np.linspace(0, 1, h) ** 1.4)[:, None]
         col = self.style.sky_zenith[None, :] * (1 - t) + self.style.sky_horizon[None, :] * t
         return np.repeat(col[:, None, :], self.cfg.img_w, axis=1).astype(np.float32)
 
     def _make_vignette(self):
+        """Radial brightness falloff mask (per-episode strength)."""
         yy, xx = np.mgrid[0:self.cfg.img_h, 0:self.cfg.img_w]
         r2 = (((xx - self.cam.cx) / self.cam.cx) ** 2 +
               ((yy - self.cam.cy) / self.cam.cy) ** 2)
         return (1.0 - self.style.vignette * (r2 / 2.0)).astype(np.float32)[..., None]
 
     def _fog(self, d):
+        """Exponential fog blend factor in [0, 1) for distance d (metres)."""
         return 1.0 - np.exp(-np.asarray(d, float) / self.style.fog_dist)
 
     # ---------------- ground ----------------
@@ -378,6 +415,8 @@ class Renderer:
         return col * (0.84 + 0.32 * jit[..., None])
 
     def _terrain_faces(self, cam_pos, R, queue):
+        """Append shaded, fogged terrain quads around the camera to the
+        painter queue (heights, normals, and colors are all vectorized)."""
         st, rad = self.grid_step, self.grid_radius
         x0 = math.floor((cam_pos[0] - rad) / st) * st
         z0 = math.floor((cam_pos[2] - rad) / st) * st
@@ -437,6 +476,7 @@ class Renderer:
             cv2.fillPoly(canvas, [poly], col.tolist(), lineType=cv2.LINE_AA)
 
     def _sun(self, canvas, cam_pos, R):
+        """Draw the sun disc + soft glare when it falls inside the frame."""
         if not self.style.sun_visible:
             return
         pc = (self.style.sun_dir * 5000.0) @ R
@@ -452,6 +492,11 @@ class Renderer:
 
     # ---------------- main ----------------
     def render(self, x, z, yaw, pitch, roll, cam_h, obstacles, speed_frac=0.5):
+        """Render one BGR camera frame from the given pose.
+
+        speed_frac (0..1) scales the motion-blur accumulation so the image
+        smears more at speed, like a real rolling camera.
+        """
         cfg, cam, style = self.cfg, self.cam, self.style
         cam_pos = np.array([x, self.terrain.height(x, z) + cam_h, z])
         R = cam.rotation(yaw, pitch, roll)
@@ -526,6 +571,7 @@ SPAWN_MODES = ("normal", "uturn", "recovery")
 
 
 def _scatter(rng, terrain, style, x_range, z_range, count, mix, ox=0.0, oz=0.0):
+    """Uniformly scatter `count` obstacles; `mix` = (rock, tree, bush) odds."""
     obs = []
     for _ in range(count):
         x = ox + rng.uniform(*x_range)
@@ -616,6 +662,12 @@ class RoverSim:
     def __init__(self, cfg: SimConfig = None, scenario: str = None,
                  spawn_mode: str = None, seed: int = None,
                  origin=(35.0, -120.0)):
+        """Build one fully-randomized episode.
+
+        scenario/spawn_mode are drawn from the seeded RNG when omitted, so a
+        seed alone reproduces the entire world, style, and noise sequence.
+        `origin` is the lat/lon anchor for the local metric frame.
+        """
         self.cfg = cfg or SimConfig()
         self.rng = np.random.default_rng(seed)
         self.origin = origin
@@ -679,6 +731,7 @@ class RoverSim:
 
     # ------------- colliders -------------
     def _collider_arrays(self):
+        """Cache obstacle centers/radii as arrays for vectorized queries."""
         cols = [(o.x, o.z, o.radius) for o in self.obstacles if o.radius > 0]
         if cols:
             arr = np.array(cols)
@@ -696,6 +749,7 @@ class RoverSim:
         return float(d.min())
 
     def _hits(self, x, z):
+        """True if the rover footprint at (x, z) overlaps any obstacle."""
         if len(self.obs_rad) == 0:
             return False
         d = np.linalg.norm(self.obs_xz - np.array([x, z]), axis=1)
@@ -712,6 +766,11 @@ class RoverSim:
 
     # ------------- sensors -------------
     def _sensor_step(self):
+        """Advance sensor noise: OU-process GPS/compass biases + white noise.
+
+        The Ornstein-Uhlenbeck pull-back keeps the biases bounded (like real
+        GPS multipath drift) instead of random-walking to infinity.
+        """
         cfg, dt, rng = self.cfg, self.cfg.dt, self.rng
         tau = 30.0
         self.gps_bias += (-self.gps_bias / tau) * dt + \
@@ -733,10 +792,12 @@ class RoverSim:
                 "altitude": float(self.terrain.height(self.x, self.z))}
 
     def goal_vector_measured(self):
+        """(distance, relative bearing) to goal as the noisy sensors see it."""
         s = self.sensor_readout()
         return goal_vector(s["lat"], s["lon"], s["heading"], s["goal_lat"], s["goal_lon"])
 
     def goal_dist_true(self):
+        """True metric distance to goal (evaluation/termination only)."""
         return math.hypot(self.goal_x - self.x, self.goal_z - self.z)
 
     # ------------- dynamics -------------
@@ -805,6 +866,8 @@ class RoverSim:
 
     # ------------- rendering -------------
     def render(self):
+        """Render the camera frame at the current pose, with terrain-driven
+        pitch/roll plus speed-scaled ride-bump oscillation."""
         hx, hz = self.terrain.slope(self.x, self.z)
         rad = math.radians(self.yaw)
         fx, fz = math.sin(rad), math.cos(rad)

@@ -71,6 +71,7 @@ class ModelConfig:
 
 @dataclass
 class TrainConfig:
+    """Optimization schedule, dataset split, and loss weights."""
     epochs: int = 60
     batch_size: int = 128
     lr: float = 3e-4
@@ -99,15 +100,27 @@ class TrainConfig:
 
 @dataclass
 class Config:
+    """Bundle of all three config groups.
+
+    A snapshot of this (via `to_dict`) is stored inside every checkpoint so
+    inference always reconstructs the exact architecture it was trained
+    with, regardless of later edits to the defaults in this file.
+    """
     sim: SimConfig = field(default_factory=SimConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
 
     def to_dict(self):
+        """Plain-dict form for embedding in checkpoints (JSON-safe)."""
         return asdict(self)
 
     @staticmethod
     def from_dict(d):
+        """Rebuild a Config from a checkpoint snapshot (inverse of to_dict).
+
+        Tuple-valued fields are restored explicitly because asdict/torch
+        serialization round-trips them as lists.
+        """
         m = dict(d.get("model", {}))
         for key, default in (("jepa_offsets", (1, 4, 8)),
                              ("frame_offsets", (0, 2, 4))):
