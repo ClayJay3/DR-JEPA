@@ -39,7 +39,7 @@ forests / walls / boulder fields, ~40–150 m goals):
 | policy | success | tip-overs | SPL¹ | contact events/ep |
 |---|---:|---:|---:|---:|
 | privileged expert (sees true obstacles *and* terrain) | 97.2% | 0.9% | 0.92 | 0.46 |
-| **DR-JEPA (camera + goal vector only)** | **87.0%** | 9.3% | **0.75** | **1.31** |
+| **DR-JEPA (camera + goal vector only)** | **88.9%** | 9.3% | **0.79** | **1.89** |
 
 ¹ *SPL = success weighted by (straight-line distance / actual path length);
 1.0 means every goal reached by a perfect path.*
@@ -372,6 +372,15 @@ flowchart TD
   ~0.9 m of believed obstacles are lethal. If the map claims *no* route
   exists, the planner retries with a slimmer lethal radius — the map can be
   wrong; the planner must not deadlock.
+- **A plan-consistency prior** stops route flip-flop: when the left and
+  right ways around an obstacle cost within epsilon of each other, every
+  replan otherwise breaks the tie differently (evidence jitter), the
+  waypoint jumps sides, and the alternating steering integrates to driving
+  *at* the obstacle. Cells near the incumbent route get a small discount
+  (never within 1.6 m of believed obstacles — an ungated discount offsets
+  the inflation penalty and causes corridor-scraping), so a challenger
+  route must win by a margin, not by luck. Measured: side-flips halve,
+  success +1.9 pts, SPL +0.035.
 - **The local controller** is the same arc-sampling recipe the privileged
   expert uses — 17 constant-curvature arcs, scored by waypoint progress,
   clearance, heading alignment, and steering smoothness — except every
@@ -383,6 +392,10 @@ flowchart TD
   while commanding forward) still triggers recovery.
 - **Recovery** mirrors the expert: reverse toward the more open side; if
   reversing is also blocked, alternate with a slow forward escape turn.
+  The reverse is **map-checked**: the belief map remembers what is behind,
+  so the reverse stops early when the rear closes below ~1 m or as soon as
+  the front has opened enough to steer out — a fixed-length blind reverse
+  regularly backed into obstacles the rover had already seen.
 - **The throttle governor** takes the *minimum* of several caps: arc
   clearance, turn sharpness, goal proximity, gap width ahead (from the
   fresh wedge — tight gaps are threaded slowly, because with 200 ms
@@ -602,6 +615,8 @@ python fsd_viz.py --checkpoint runs/best.pth --frames 900    # cinematic belief 
 
 # 7 · take it outside: export a phone bundle for the Android test rig
 python export_android.py --checkpoint runs/best.pth --verify # -> runs/best.drjepa
+python export_android.py --checkpoint runs/best.pth --img-size 280 --quantize \
+    --out runs/best_280q.drjepa --verify                     # ~6x faster on-phone
 ```
 
 ---

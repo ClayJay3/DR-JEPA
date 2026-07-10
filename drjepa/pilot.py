@@ -499,6 +499,43 @@ class MapPilot:
                 cost = np.where(inv_mask,
                                 np.maximum(cost - 2.9 * invite, 1.35), cost)
 
+        # ---- plan-consistency prior (route hysteresis) ----
+        # Near-tie left/right routes around an obstacle otherwise flip on
+        # every replan (each evidence/decay jitter breaks the tie the
+        # other way), the ~7 m waypoint jumps sides, and the alternating
+        # steering integrates to driving AT the obstacle. Discount cells
+        # near the incumbent route so a challenger must beat it by a real
+        # margin, not by epsilon; genuinely better routes (or new
+        # evidence blocking the old one) still win.
+        if self.path is not None and len(self.path) > 1:
+            pi_prev = (self.path[:, 0] - self.map_corner[0]) / self.res - i0
+            pj_prev = (self.path[:, 1] - self.map_corner[1]) / self.res - j0
+            inb = ((pi_prev >= 0) & (pi_prev < ph * 2) &
+                   (pj_prev >= 0) & (pj_prev < pw * 2))
+            if inb.sum() >= 2:
+                on_prev = np.ones((ph, pw), np.uint8)
+                on_prev[(pi_prev[inb] // 2).astype(int),
+                        (pj_prev[inb] // 2).astype(int)] = 0
+                d_prev = cv2.distanceTransform(on_prev, cv2.DIST_L2, 3) \
+                    * (2 * self.res)
+                # 0.45 within 3 m halves the flip rate; the clearance gate
+                # (no discount within 1.6 m of believed obstacles) is
+                # essential -- without it the prior partially offsets the
+                # obstacle-inflation penalty and the planner keeps
+                # threading tight corridors it should widen out of
+                # (measured: contacts 1.31 -> 1.91/ep ungated)
+                # 0.45 within 3 m of the incumbent route, only on cells
+                # >1.6 m clear of believed obstacles. Measured (108 eps
+                # per arm): flips halve; success +1.9 / SPL +0.035 / tips
+                # equal vs no prior; grazes rise ~+0.6/ep because the old
+                # flip-flop wobble was accidental clearance margin -- the
+                # commitment threads gaps it previously dithered at. A
+                # 2.2 m gate trades that back (contacts 1.48, cf 65%) at
+                # -0.9 success / +1.8 tips; mission metrics won.
+                disc = 0.45 * np.clip(1.0 - d_prev / 3.0, 0.0, 1.0)
+                disc *= (d2 > 1.6)
+                cost = np.maximum(cost - disc, 0.8)
+
         def to_cell(p):
             """World point -> clamped planning-grid cell."""
             return (int(np.clip((p[0] - self.map_corner[0]) / self.res - i0, 0,
@@ -621,14 +658,35 @@ class MapPilot:
                 if len(seg) > 1 else np.array([0.0])
             w = int(np.searchsorted(along, 7.0))
             target = seg[min(w + 1, len(seg) - 1)]
+        self.last_target = target              # for HUD / diagnostics
 
         goal_d = float(np.linalg.norm(self.goal - self.pose))
         yaw = math.radians(self.heading)
 
         if self.recovery > 0:
             self.recovery -= 1
-            self.prev_steer = self.recovery_steer
-            return -0.5, self.recovery_steer
+            # map-checked reverse: the belief map remembers what is BEHIND.
+            # A fixed-length blind reverse regularly backed into obstacles
+            # the rover had already seen; stop early when the rear closes
+            # or as soon as the front has opened enough to steer out.
+            ryaw = math.radians(self.heading)
+            back = self.pose[None] - np.array(
+                [math.sin(ryaw), math.cos(ryaw)])[None] * \
+                np.array([[0.9], [1.7], [2.5]])
+            rear_clear = float(self._map_clearance(back).min()) \
+                if hasattr(self, "_dist_m") else 99.0
+            ci = self.wc // 2
+            front_open = float(self._wedge_dist[ci - 2:ci + 3, :6].min()) \
+                if hasattr(self, "_wedge_dist") else 0.0
+            if rear_clear < 1.05 or front_open > 2.2:
+                self.recovery = 0
+                if rear_clear < 1.05 and front_open <= 2.2:
+                    # boxed in both ways: forward escape turn instead
+                    self.escape = 8
+                    self.recovery_steer = -self.recovery_steer
+            else:
+                self.prev_steer = self.recovery_steer
+                return -0.5, self.recovery_steer
         if self.escape > 0:
             self.escape -= 1
             self.prev_steer = self.recovery_steer

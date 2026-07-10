@@ -4,10 +4,13 @@ Walk around with your phone and watch the v12 navigator perceive, remember,
 and plan against the real world. The app runs the full MapPilot loop
 on-device:
 
-- **camera** → frozen DINOv2 → MapDecoder terrain wedge (ONNX Runtime)
-- **GPS + compass** → complementary pose filter (same gains, dt-scaled)
+- **ARCore** owns the camera and provides VIO pose (cm-accurate, 30 Hz),
+  heading, and speed; the compass is used once at startup to align
+  ARCore's arbitrary world yaw to true north, then the offset is frozen
+- **camera frames** → frozen DINOv2 → MapDecoder terrain wedge
+  (ONNX Runtime, optionally int8-quantized)
 - wedges fuse into the **persistent log-odds belief map** (occupancy,
-  elevation, sand, tip-hazard; VO scan-matching included)
+  elevation, sand, tip-hazard)
 - **A\*** replans on the believed map; the arc controller says what it
   *would* command (throttle/steer HUD — you are the actuator)
 - the **map-space JEPA ghost layer** shows what the completer imagines in
@@ -22,9 +25,15 @@ needle, throttle bar).
 
 ```bash
 python export_android.py --checkpoint runs/best.pth --verify
-# fast phone variant (backbone at 280px instead of 448px):
-python export_android.py --checkpoint runs/best.pth --img-size 280 --out runs/best_280.drjepa
+# fast phone variant: 280px backbone + int8 quantization (~2.5x each axis)
+python export_android.py --checkpoint runs/best.pth --img-size 280 --quantize \
+    --out runs/best_280q.drjepa --verify
 ```
+
+`--quantize` (dynamic int8, per-channel) is ~2.5× faster on ARMv9 phones
+and 4× smaller, at ~8% relative token error from DINOv2's activation
+outliers — perception quality may degrade; export a fp32 twin and A/B
+them in the field (that's what bundle switching is for).
 
 A `.drjepa` file is a zip of three ONNX graphs (backbone / decoder /
 completer, ~90 MB) plus a manifest carrying the geometry and every fusion
@@ -43,39 +52,53 @@ gradle wrapper --gradle-version 8.7   # once, if you have no wrapper
 ./gradlew installDebug
 ```
 
-Needs Android Studio Koala+ / AGP 8.5, a device with Android 8+ (a recent
-SoC recommended — the DINOv2 forward dominates the step time).
+Needs Android Studio Koala+ / AGP 8.5 and an ARCore-supported device
+(Google Play Services for AR installs on first launch if missing). The
+DINOv2 forward dominates the step time — a recent SoC is strongly
+recommended.
 
 ## 3 · In the field
 
 1. Copy `.drjepa` bundles anywhere on the phone (Downloads is fine).
 2. Launch, grant camera + location, tap **Load model**, pick a bundle
    (remembered across restarts).
-3. Wait for a GPS fix, hold the phone in landscape facing your direction
-   of travel (~1.4 m up, back camera forward). The UI is landscape-locked;
-   note the model always sees a square center-crop, so orientation changes
-   the display, not the model's field of view.
+3. Hold the phone in landscape (~1.4 m up, back camera facing your
+   direction of travel) and move it slowly for a few seconds: VIO
+   initializes, then the compass+GPS lock ARCore's world to true north
+   (the hints on screen walk you through it). The model always sees a
+   square center-crop, so orientation changes the display, not the
+   model's field of view.
 4. Tap the top-down map to set a goal, or **Goal 30m ahead**.
 5. Walk. Follow the steering needle / throttle bar if you want to *be*
    the closed loop; the AR path shows the current A\* route, the map
    corner shows what the model believes and imagines.
-6. **Reset map** wipes the belief map and pose filter (new run, new
-   memory) without reloading the model.
+6. **Reset map** wipes the belief map (new run, new memory) without
+   reloading the model or re-aligning.
 
-The status line shows bundle name, per-step latency, achieved rate, GPS
-speed, heading, GPS accuracy, and goal distance (`NO ROUTE` = A\* found
-no path on the believed map).
+The status line shows bundle name, per-step latency, achieved rate, VIO
+tracking state, speed, heading, and goal distance (`NO ROUTE` = A\*
+found no path on the believed map).
 
 ## Deliberate deviations from the sim pilot
 
 Documented in `Pilot.kt`; the fusion/planning math is otherwise a direct
 port with constants read from the bundle manifest.
 
+- **VIO pose replaces the complementary filter.** ARCore's pose is
+  cm-accurate at walking scale, so the GPS/odometry fusion and the VO
+  scan-matching correction are bypassed (`vioMode` in `Pilot.kt`) — the
+  sim needed them because its GPS walks and its compass wobbles; the
+  phone has something strictly better. Speed also comes from VIO pose
+  deltas (GPS speed is useless at walking pace). GPS's only remaining
+  jobs: compass declination and the status line.
+- **North alignment.** ARCore's world yaw is arbitrary; a ~4 s circular
+  mean of (compass − VIO yaw) fixes the offset, then it freezes — a
+  frozen small error is a constant map rotation the pilot never notices,
+  a drifting one would smear the belief map.
 - **Variable step time.** The sim ticks at 10 Hz; the phone steps as fast
-  as the backbone runs (~0.3–1.5 s on CPU). Pose integration, GPS gain,
-  and log-odds decay scale by real dt. `frame_offsets` still index
-  perception steps, so the multi-frame parallax baseline stretches with
-  the actual rate — the motion input tells the decoder the true speed.
+  as the backbone runs. Log-odds decay scales by real dt; `frame_offsets`
+  index perception steps, and the motion input tells the decoder the
+  true speed.
 - **No stuck detector.** A standing human is not a stuck rover. The
   arc-infeasibility recovery branches remain and surface as reverse
   throttle ("back up") on the HUD.
@@ -87,10 +110,11 @@ port with constants read from the bundle manifest.
 
 ## Performance notes
 
-- The step budget is almost entirely the DINOv2 forward. A 280px export
-  (~2.5× faster) is the first knob; ONNX Runtime runs multithreaded CPU
-  by default.
-- GPS speed is the `speed` motion input; at walking pace it is noisy near
-  zero — expect the pose filter to breathe until you move steadily.
-- Compass heading needs calibration (wave the phone in a figure-eight if
-  the map paints smeared walls).
+- The step budget is almost entirely the DINOv2 forward. Two multiplying
+  knobs: `--img-size 280` (~2.5×) and `--quantize` (~2.5× on ARMv9,
+  e.g. Tensor G3 / Pixel 8 Pro with i8mm). Expect roughly: 448 fp32
+  ~0.7 Hz → 280 fp32 ~1.7 Hz → 280 int8 ~4 Hz on a Pixel 8 Pro.
+- ORT threads are capped at 4 to stay on the big/mid cores of
+  big.LITTLE SoCs; the little cores slow the parallel sections down.
+- If int8 perception looks degraded (phantom obstacles, mushy walls),
+  fall back to the fp32 bundle — the A/B is one **Load model** away.

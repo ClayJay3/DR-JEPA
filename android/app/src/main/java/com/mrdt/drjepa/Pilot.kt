@@ -18,8 +18,11 @@ const val M_PER_DEG = 111139.0
 /** One sensor snapshot fed to Pilot.step (the phone *is* the rover). */
 class SensorSample(
     val lat: Double, val lon: Double,
-    val speed: Float,        // m/s, from GPS
+    val speed: Float,        // m/s (VIO pose deltas; GPS as fallback)
     val headingDeg: Float,   // true-north bearing of the camera look direction
+    val poseX: Float = 0f,   // VIO position in the local frame (x = east)
+    val poseZ: Float = 0f,   // (z = north); metres
+    val poseValid: Boolean = false,
 )
 
 /** Immutable per-step output handed to the UI thread. */
@@ -90,6 +93,7 @@ class Pilot(private val model: ModelBundle) {
     private var goalZ = 0f
     private var hasGoal = false
     private var pendingReset = false
+    private var vioMode = false
 
     private var path: FloatArray? = null      // [x,z,...] world
     private var prevSteer = 0f
@@ -154,6 +158,23 @@ class Pilot(private val model: ModelBundle) {
 
     // ---------------- pose ----------------
     private fun updatePose(s: SensorSample, dt: Float) {
+        vioMode = s.poseValid
+        if (s.poseValid) {
+            // VIO (ARCore) pose: centimetre-accurate and drift-free at
+            // walking scale, so the complementary GPS filter is bypassed
+            // entirely -- the map's self-consistency is what matters
+            if (!hasPose) {
+                hasPose = true
+                val c = n * res / 2f
+                cornerX = s.poseX - c
+                cornerZ = s.poseZ - c
+            }
+            poseX = s.poseX
+            poseZ = s.poseZ
+            heading = s.headingDeg
+            maybeRecenter()
+            return
+        }
         if (!hasOrigin) {
             originLat = s.lat; originLon = s.lon; hasOrigin = true
         }
@@ -319,6 +340,9 @@ class Pilot(private val model: ModelBundle) {
     /** Scan-matching pose correction; returns true if the pose moved. */
     private fun voAlign(ii: IntArray, jj: IntArray, upd: FloatArray,
                         ok: BooleanArray): Boolean {
+        // with VIO the pose is already better than a cell; a VO nudge would
+        // just be snapped back by the next VIO sample
+        if (vioMode) return false
         if (recovery > 0 || escape > 0) return false
         val ks = ArrayList<Int>()
         for (k in upd.indices)

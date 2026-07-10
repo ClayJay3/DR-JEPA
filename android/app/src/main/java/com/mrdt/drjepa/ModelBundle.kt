@@ -90,8 +90,11 @@ class ModelBundle private constructor(
             }
             val env = OrtEnvironment.getEnvironment()
             val opts = OrtSession.SessionOptions().apply {
+                // cap at 4: big.LITTLE phones (e.g. Tensor G3: 1X + 4A715
+                // + 4A510) lose throughput when work lands on the little
+                // cores
                 setIntraOpNumThreads(Runtime.getRuntime().availableProcessors()
-                    .coerceIn(2, 6))
+                    .coerceIn(2, 4))
             }
 
             fun sess(key: String) = env.createSession(

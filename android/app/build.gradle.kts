@@ -35,12 +35,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
-    val camerax = "1.3.4"
-    implementation("androidx.camera:camera-core:$camerax")
-    implementation("androidx.camera:camera-camera2:$camerax")
-    implementation("androidx.camera:camera-lifecycle:$camerax")
-    implementation("androidx.camera:camera-view:$camerax")
-
+    implementation("com.google.ar:core:1.44.0")
     implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.18.0")
 }

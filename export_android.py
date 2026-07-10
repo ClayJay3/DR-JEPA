@@ -148,7 +148,8 @@ def _manifest(cfg: Config, name):
 # --------------------------------------------------------------------------
 # Verification
 # --------------------------------------------------------------------------
-def _verify(bundle, model, backbone, cfg: Config, comp_temp):
+def _verify(bundle, model, backbone, cfg: Config, comp_temp,
+            quantized=False):
     """Run onnxruntime on random inputs and diff against PyTorch."""
     import onnxruntime as ort
 
@@ -166,6 +167,7 @@ def _verify(bundle, model, backbone, cfg: Config, comp_temp):
         ref = BackboneExport(backbone)(torch.from_numpy(img)).detach().numpy()
         out = sess("backbone.onnx").run(None, {"image": img})[0]
         e_bb = float(np.abs(out - ref).max())
+        e_bb_mean = float(np.abs(out - ref).mean())
 
         F = len(mc.frame_offsets)
         toks = rng.standard_normal((1, F, mc.n_tokens, mc.feat_dim)) \
@@ -185,12 +187,19 @@ def _verify(bundle, model, backbone, cfg: Config, comp_temp):
         outc = sess("completer.onnx").run(None, {"belief": belief})[0]
         e_comp = float(np.abs(outc - refc).max())
 
-    print(f"verify  max|onnx - torch|  backbone {e_bb:.2e}  "
+    rel = e_bb_mean / max(float(np.abs(ref).mean()), 1e-6)
+    print(f"verify  max|onnx - torch|  backbone {e_bb:.2e} "
+          f"(mean {e_bb_mean:.2e}, {rel * 100:.1f}% rel)  "
           f"decoder {e_dec:.2e}  completer {e_comp:.2e}")
-    ok = e_bb < 1e-3 and e_dec < 1e-3 and e_comp < 1e-4
-    if not ok:
+    # int8 is lossy by design: ~8% relative token error measured on
+    # dinov2_vits14 (activation outliers). Anything well beyond that
+    # means the quantization went wrong, not just noisy.
+    bb_ok = (rel < 0.15 and e_bb < 3.0) if quantized else e_bb < 1e-3
+    if not (bb_ok and e_dec < 1e-3 and e_comp < 1e-4):
         raise SystemExit("verification FAILED: exported graphs diverge")
-    print("verify  OK")
+    print("verify  OK" + (" (backbone int8: error is quantization noise; "
+                          "A/B it against the fp32 bundle in the field)"
+                          if quantized else ""))
 
 
 # --------------------------------------------------------------------------
@@ -206,6 +215,10 @@ def main():
                          "14). The token pooling absorbs the grid change, "
                          "so smaller = faster on-phone at some sharpness "
                          "cost; the trained weights are unchanged.")
+    ap.add_argument("--quantize", action="store_true",
+                    help="dynamic-int8-quantize the backbone MatMuls "
+                         "(~2-2.5x faster on ARMv8.2+/ARMv9 phones; the "
+                         "small decoder/completer stay fp32)")
     args = ap.parse_args()
 
     out = args.out or os.path.splitext(args.checkpoint)[0] + ".drjepa"
@@ -227,9 +240,18 @@ def main():
     F = len(mc.frame_offsets)
     with tempfile.TemporaryDirectory() as td, torch.no_grad():
         print(f"exporting backbone ({mc.backbone}, {mc.img_size}px) ...")
+        bb_path = os.path.join(td, "backbone.onnx")
         _export(BackboneExport(backbone),
                 (torch.zeros(1, 3, mc.img_size, mc.img_size),),
-                os.path.join(td, "backbone.onnx"), ["image"], ["tokens"])
+                bb_path, ["image"], ["tokens"])
+        if args.quantize:
+            # per-channel weights measured 7-8% relative token error vs
+            # 18% per-tensor (DINOv2 activation outliers); excluding late
+            # blocks bought nothing further. 2.5x faster, 4x smaller.
+            print("quantizing backbone (dynamic int8, per-channel) ...")
+            from onnxruntime.quantization import quantize_dynamic, QuantType
+            quantize_dynamic(bb_path, bb_path, weight_type=QuantType.QInt8,
+                             per_channel=True)
 
         print("exporting decoder ...")
         _export(model.map_decoder,
@@ -254,7 +276,8 @@ def main():
     mb = os.path.getsize(out) / 1e6
     print(f"wrote {out} ({mb:.1f} MB)")
     if args.verify:
-        _verify(out, model, backbone, cfg, comp_temp)
+        _verify(out, model, backbone, cfg, comp_temp,
+                quantized=args.quantize)
 
 
 if __name__ == "__main__":

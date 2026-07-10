@@ -7,33 +7,28 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.util.AttributeSet
 import android.view.View
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
-import kotlin.math.cos
-import kotlin.math.tan
 
 /**
- * Full-screen overlay on the camera preview: the A* planner path projected
- * onto the ground (AR), the goal marker, and the telemetry HUD (danger bar,
- * steering needle, throttle bar -- the same layout as drjepa.pilot.draw_hud).
+ * Full-screen overlay on the ARCore camera background: the A* planner path
+ * projected onto the ground, the goal marker, and the telemetry HUD
+ * (danger bar, steering needle, throttle bar -- the same layout as
+ * drjepa.pilot.draw_hud).
  *
- * Projection: world point -> device frame via the rotation-vector matrix,
- * then pinhole projection with a focal length derived from the camera FOV
- * and the PreviewView FILL_CENTER crop.
+ * Projection uses ARCore's view*projection matrices plus the frozen
+ * EN <-> ARCore-world alignment, so the path is pinned to the ground with
+ * VIO accuracy: local EN point -> ARCore world -> clip -> screen.
  */
 class OverlayView(context: Context, attrs: AttributeSet?) :
     View(context, attrs) {
 
     @Volatile var result: PilotResult? = null
-    @Volatile var deviceToWorld: FloatArray? = null
+    @Volatile var viewProj: FloatArray? = null    // column-major 4x4
+    @Volatile var arAlign: ArAlign? = null
     @Volatile var hint: String? = "load a model bundle"
-    /** Horizontal FOV (deg) of the camera sensor's long side. */
-    @Volatile var fovLongDeg = 65f
-    /** Buffer aspect ratio, long side / short side (4:3 stream). */
-    @Volatile var bufferAspect = 4f / 3f
-    /** Phone height above the ground while walking (m). */
-    var camHeightM = 1.4f
 
     private val pathPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(0, 255, 140)
@@ -57,69 +52,67 @@ class OverlayView(context: Context, attrs: AttributeSet?) :
         setShadowLayer(4f, 0f, 0f, Color.BLACK)
     }
     private val arPath = Path()
+    private val proj = FloatArray(3)   // sx, sy, view-depth (scratch)
 
-    /** World (E, N, U) -> screen (x, y, depth); depth <= 0 means behind. */
-    private fun project(e: Float, n: Float, u: Float, r: FloatArray,
-                        f: Float, cx: Float, cy: Float): FloatArray {
-        val dx = r[0] * e + r[3] * n + r[6] * u
-        val dy = r[1] * e + r[4] * n + r[7] * u
-        val dz = r[2] * e + r[5] * n + r[8] * u
-        val depth = -dz                       // back camera looks along -Z
-        if (depth < 0.3f) return floatArrayOf(0f, 0f, depth)
-        return floatArrayOf(cx + f * dx / depth, cy + f * (-dy) / depth, depth)
+    /** Local EN point + elevation -> screen; proj[2] <= 0 means behind. */
+    private fun project(e: Float, n: Float, elevY: Float, vp: FloatArray,
+                        al: ArAlign, w: Float, h: Float): FloatArray {
+        // EN -> ARCore world (inverse of ArAlign.toLocal*)
+        val co = cos(al.offsetRad); val so = sin(al.offsetRad)
+        val ep = co * e - so * n
+        val np = so * e + co * n
+        val ax = ep + al.anchorX
+        val az = al.anchorZ - np
+        val ay = al.groundY0 + elevY
+        val cx = vp[0] * ax + vp[4] * ay + vp[8] * az + vp[12]
+        val cy = vp[1] * ax + vp[5] * ay + vp[9] * az + vp[13]
+        val cw = vp[3] * ax + vp[7] * ay + vp[11] * az + vp[15]
+        proj[2] = cw
+        if (cw > 0.1f) {
+            proj[0] = (cx / cw * 0.5f + 0.5f) * w
+            proj[1] = (0.5f - cy / cw * 0.5f) * h
+        }
+        return proj
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val res = result
-        val r = deviceToWorld
+        val vp = viewProj
+        val al = arAlign
         val w = width.toFloat()
         val h = height.toFloat()
 
-        if (res != null && r != null) {
-            // focal length of the FILL_CENTER-cropped preview in view px:
-            // the buffer's long side (which carries fovLongDeg) aligns with
-            // the screen's long dimension in both orientations
-            val f = max(max(w, h), min(w, h) * bufferAspect) / 2f /
-                tan(Math.toRadians(fovLongDeg / 2.0)).toFloat()
-            val cx = w / 2f
-            val cy = h / 2f
-            val camE = res.poseX
-            val camN = res.poseZ
-            val camU = res.groundY + camHeightM
-
+        if (res != null && vp != null && al != null) {
             val pth = res.pathWorld
             val elev = res.pathElev
             if (pth != null && elev != null) {
                 arPath.reset()
                 var pen = false
                 for (k in 0 until pth.size / 2) {
-                    val pt = project(pth[2 * k] - camE, pth[2 * k + 1] - camN,
-                        elev[k] - camU, r, f, cx, cy)
-                    if (pt[2] < 0.3f) { pen = false; continue }
-                    if (!pen) { arPath.moveTo(pt[0], pt[1]); pen = true }
-                    else arPath.lineTo(pt[0], pt[1])
+                    val p = project(pth[2 * k], pth[2 * k + 1], elev[k],
+                        vp, al, w, h)
+                    if (p[2] < 0.1f) { pen = false; continue }
+                    if (!pen) { arPath.moveTo(p[0], p[1]); pen = true }
+                    else arPath.lineTo(p[0], p[1])
                 }
                 canvas.drawPath(arPath, pathPaint)
                 for (k in 0 until pth.size / 2) {
-                    val pt = project(pth[2 * k] - camE, pth[2 * k + 1] - camN,
-                        elev[k] - camU, r, f, cx, cy)
-                    if (pt[2] < 0.3f) continue
-                    val rad = (14f / pt[2]).coerceIn(3f, 12f)  // shrink with range
-                    canvas.drawCircle(pt[0], pt[1], rad, dotPaint)
+                    val p = project(pth[2 * k], pth[2 * k + 1], elev[k],
+                        vp, al, w, h)
+                    if (p[2] < 0.1f) continue
+                    val rad = (14f / p[2]).coerceIn(3f, 12f)
+                    canvas.drawCircle(p[0], p[1], rad, dotPaint)
                 }
             }
 
             if (res.hasGoal) {
-                val gU = 0f  // goal flag base at believed ground
-                val base = project(res.goalX - camE, res.goalZ - camN,
-                    res.pathElev?.lastOrNull()?.minus(camU) ?: (gU - camU),
-                    r, f, cx, cy)
-                val top = project(res.goalX - camE, res.goalZ - camN,
-                    (res.pathElev?.lastOrNull() ?: gU) + 2f - camU,
-                    r, f, cx, cy)
-                if (base[2] > 0.3f && top[2] > 0.3f) {
-                    canvas.drawLine(base[0], base[1], top[0], top[1], goalPaint)
+                val gElev = res.pathElev?.lastOrNull() ?: 0f
+                val base = project(res.goalX, res.goalZ, gElev, vp, al, w, h)
+                val bx = base[0]; val by = base[1]; val bw = base[2]
+                val top = project(res.goalX, res.goalZ, gElev + 2f, vp, al, w, h)
+                if (bw > 0.1f && top[2] > 0.1f) {
+                    canvas.drawLine(bx, by, top[0], top[1], goalPaint)
                     canvas.drawCircle(top[0], top[1], 12f, goalPaint)
                     canvas.drawText("%.0f m".format(res.goalDist),
                         top[0] + 16f, top[1], textPaint)
