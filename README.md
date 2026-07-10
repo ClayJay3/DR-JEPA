@@ -380,7 +380,19 @@ flowchart TD
   (never within 1.6 m of believed obstacles — an ungated discount offsets
   the inflation penalty and causes corridor-scraping), so a challenger
   route must win by a margin, not by luck. Measured: side-flips halve,
-  success +1.9 pts, SPL +0.035.
+  success +1.9 pts, SPL +0.035. Stronger commitment was measured and
+  declined: a family of path-level variants (keep the incumbent route
+  verbatim unless a challenger beats its line-integral cost by 4–12%,
+  with truly-blocked / hazard / drifted-off-line releases) froze the
+  drawn path and cut contacts ~23% (1.49 vs 1.93/ep), and at a fair
+  180 s episode cap reached success/tip parity (its slower-but-surer
+  routes time out at 90 s) — but its paths run a few percent longer by
+  construction (SPL 0.770 vs 0.795), and path efficiency won the call.
+  Two design lessons survive: re-rooting the route every replan is
+  zero-lag safety (any commitment scheme reacts to fresh evidence only
+  through its release test — each variant moved the failure to whatever
+  the test missed), and the residual replan "wobble" near walls is
+  genuine re-decision under progressive wall discovery, not tie-jitter.
 - **The local controller** is the same arc-sampling recipe the privileged
   expert uses — 17 constant-curvature arcs, scored by waypoint progress,
   clearance, heading alignment, and steering smoothness — except every

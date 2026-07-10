@@ -180,7 +180,7 @@ def evaluate(args):
     results = []
     for ep in range(args.episodes):
         seed = args.seed + ep
-        sim = RoverSim(SimConfig(), seed=seed)
+        sim = RoverSim(SimConfig(max_frames=args.max_frames), seed=seed)
         expert = ArcPlanner(sim, np.random.default_rng(seed))
         if pilot:
             pilot.reset()
@@ -511,6 +511,8 @@ if __name__ == "__main__":
     p.add_argument("--seed", type=int, default=1000)
     p.add_argument("--record", type=int, default=0, help="record first N episodes")
     p.add_argument("--record_dir", default="eval_out")
+    p.add_argument("--max_frames", type=int, default=900,
+                   help="episode time cap in frames (10 fps)")
     p.add_argument("--no_vo", action="store_true",
                    help="disable visual-odometry map alignment")
     p.add_argument("--complete", action="store_true",
