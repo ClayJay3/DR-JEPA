@@ -599,6 +599,9 @@ python drjepa.py eval ... --complete                         # completion in the
 # 6 · watch it drive
 python live_inference_test.py --checkpoint runs/best.pth     # endless run + HUD
 python fsd_viz.py --checkpoint runs/best.pth --frames 900    # cinematic belief view
+
+# 7 · take it outside: export a phone bundle for the Android test rig
+python export_android.py --checkpoint runs/best.pth --verify # -> runs/best.drjepa
 ```
 
 ---
@@ -663,6 +666,9 @@ drjepa.py                CLI: preprocess / train / eval
 generate_synth_data.py   episode generator (--scenario, --dagger)
 live_inference_test.py   endless closed-loop demo
 fsd_viz.py               cinematic belief-world visualization
+export_android.py        checkpoint -> .drjepa ONNX bundle for the phone app
+android/                 Android test rig: the phone is the rover
+                         (camera+GPS+compass, AR route, belief-map HUD)
 ```
 
 ---
@@ -716,3 +722,10 @@ the wedges; deploy stays camera-only), plus one depth→wedge conversion
 script. Co-train real and sim data by passing multiple directories to
 `--data_dir`. The frozen DINOv2 backbone is the transfer anchor — only the
 small heads need to adapt.
+
+For a zero-hardware reality check before any of that, the [Android test
+rig](android/README.md) runs the full pilot (perception → belief map →
+A\* → arc controller) on a phone: camera + GPS + compass play the rover,
+the planned route is drawn in AR, and `.drjepa` bundles exported from any
+checkpoint (`export_android.py`) are loaded from device storage so runs
+can be compared in the field.
