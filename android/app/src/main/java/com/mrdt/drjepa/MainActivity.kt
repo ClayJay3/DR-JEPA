@@ -112,6 +112,28 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnReset).setOnClickListener {
             pilot?.requestReset()
         }
+        val btnRecord = findViewById<Button>(R.id.btnRecord)
+        btnRecord.setOnClickListener {
+            val running = arCam.recorder
+            if (running != null) {
+                arCam.recorder = null
+                running.close()
+                btnRecord.text = getString(R.string.record)
+                Toast.makeText(this,
+                    "saved ${running.frames} frames\n${running.dir}",
+                    Toast.LENGTH_LONG).show()
+            } else {
+                if (!arCam.depthSupported) {
+                    Toast.makeText(this, "ARCore depth not supported " +
+                        "on this device", Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
+                arCam.recorder = Recorder(this) { n ->
+                    runOnUiThread { btnRecord.text = "STOP ($n)" }
+                }
+                btnRecord.text = "STOP (0)"
+            }
+        }
         mapHud.onGoalTap = { x, z -> pilot?.setGoalWorld(x, z) }
 
         requestPermissions.launch(arrayOf(
@@ -238,6 +260,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        arCam.recorder?.let { arCam.recorder = null; it.close() }
         bundle?.close()
         arCam.session?.close()
     }

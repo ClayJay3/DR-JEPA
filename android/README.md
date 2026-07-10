@@ -30,10 +30,13 @@ python export_android.py --checkpoint runs/best.pth --img-size 280 --quantize \
     --out runs/best_280q.drjepa --verify
 ```
 
-`--quantize` (dynamic int8, per-channel) is ~2.5× faster on ARMv9 phones
-and 4× smaller, at ~8% relative token error from DINOv2's activation
-outliers — perception quality may degrade; export a fp32 twin and A/B
-them in the field (that's what bundle switching is for).
+`--quantize` (dynamic int8, per-channel, **MatMul ops only**) is ~2.5×
+faster on ARMv9 phones and 4× smaller, at ~8% relative token error from
+DINOv2's activation outliers — perception quality may degrade; export a
+fp32 twin and A/B them in the field (that's what bundle switching is
+for). Conv ops stay fp32 deliberately: quantizing them emits
+`ConvInteger`, which ONNX Runtime's Android build does not implement
+(the bundle loads on desktop but fails on-device).
 
 A `.drjepa` file is a zip of three ONNX graphs (backbone / decoder /
 completer, ~90 MB) plus a manifest carrying the geometry and every fusion
@@ -78,6 +81,41 @@ recommended.
 The status line shows bundle name, per-step latency, achieved rate, VIO
 tracking state, speed, heading, and goal distance (`NO ROUTE` = A\*
 found no path on the believed map).
+
+## 4 · Collect real training data (Record mode)
+
+The sim-trained decoder misses real-world obstacle classes it never saw
+(trees, foliage); **Record** turns the phone into a labeling rig that
+fixes exactly that. Tap **Record** and just walk around (no model, GPS,
+or north alignment needed — VIO tracking is enough); tap again to stop.
+At ~5 Hz the app stores the full camera frame, ARCore's metric depth
+image, and the physical camera pose + intrinsics under
+`Android/data/com.mrdt.drjepa/files/collect/rec_*/`.
+
+Point the camera the way the rover would see the world (~1.4 m up,
+slightly down), walk *past and around* obstacles so depth sees them from
+several sides, and prefer varied scenes — depth reaches ~8 m, so close
+in on the things you want labeled.
+
+Back on the workstation:
+
+```bash
+adb pull /sdcard/Android/data/com.mrdt.drjepa/files/collect
+python real2dataset.py --sessions collect/rec_* --output data_real
+python real2dataset.py --selftest        # geometry sanity check
+python drjepa.py preprocess --data data_sim,data_real --out packed
+python drjepa.py train --data packed ...
+```
+
+`real2dataset.py` unprojects each depth image through its recorded pose
+and builds the same occupancy / visibility / elevation wedge labels the
+simulator emits analytically (tip-hazard derives from elevation in the
+trainer; sand has no real label and stays zero). Cells without depth
+returns are marked invisible and every loss is visibility-masked, so
+the short depth range just supervises fewer cells. The resulting
+episodes mix with simulator data in `preprocess`/`train` with **zero
+trainer changes** — real episodes simply contribute nothing to the map
+completer, which needs ground-truth grids only the sim has.
 
 ## Deliberate deviations from the sim pilot
 

@@ -64,5 +64,13 @@
             android:layout_weight="1"
             android:textSize="12sp"
             android:text="@string/reset_map" />
+
+        <Button
+            android:id="@+id/btnRecord"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="12sp"
+            android:text="@string/record" />
     </LinearLayout>
 </FrameLayout>

@@ -248,10 +248,15 @@ def main():
             # per-channel weights measured 7-8% relative token error vs
             # 18% per-tensor (DINOv2 activation outliers); excluding late
             # blocks bought nothing further. 2.5x faster, 4x smaller.
+            # MatMul ONLY: quantizing Conv emits ConvInteger, which the
+            # ONNX Runtime Android build does not implement (bundle fails
+            # to load on-device); the backbone's lone conv is the patch
+            # embed, a negligible fraction of the compute.
             print("quantizing backbone (dynamic int8, per-channel) ...")
             from onnxruntime.quantization import quantize_dynamic, QuantType
             quantize_dynamic(bb_path, bb_path, weight_type=QuantType.QInt8,
-                             per_channel=True)
+                             per_channel=True,
+                             op_types_to_quantize=["MatMul"])
 
         print("exporting decoder ...")
         _export(model.map_decoder,

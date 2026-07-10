@@ -68,10 +68,15 @@ class ArCam(
     companion object {
         const val CAM_HEIGHT_M = 1.4f      // phone above ground while walking
         private const val ALIGN_SAMPLES = 120  // ~4 s of compass agreement
+        private const val REC_PERIOD_NS = 200_000_000L  // record at ~5 Hz
     }
+
+    private var lastRecNs = 0L
 
     var session: Session? = null; private set
     @Volatile var imgSize = 0               // 0 until a bundle is loaded
+    @Volatile var recorder: Recorder? = null // non-null = collecting data
+    @Volatile var depthSupported = false; private set
     @Volatile var tracking = false; private set
     @Volatile var alignLocked = false; private set
     @Volatile var trackingMsg = "VIO initializing"; private set
@@ -123,10 +128,14 @@ class ArCam(
     /** Create + configure the session; throws if ARCore can't. */
     fun createSession() {
         val s = Session(activity)
+        depthSupported = s.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
         val config = Config(s).apply {
             planeFindingMode = Config.PlaneFindingMode.DISABLED
             lightEstimationMode = Config.LightEstimationMode.DISABLED
-            depthMode = Config.DepthMode.DISABLED
+            // depth feeds the data-collection mode (Recorder); the pilot
+            // itself never reads it
+            depthMode = if (depthSupported) Config.DepthMode.AUTOMATIC
+                        else Config.DepthMode.DISABLED
             focusMode = Config.FocusMode.AUTO
             updateMode = Config.UpdateMode.BLOCKING
         }
@@ -255,6 +264,35 @@ class ArCam(
                 anchorX, anchorZ, anchorY - CAM_HEIGHT_M)
             if (alignN >= ALIGN_SAMPLES) alignLocked = true
         }
+
+        // --- data collection: needs tracking only (no model, no north
+        // alignment, no GPS) so recording works anywhere immediately ---
+        val rec = recorder
+        if (rec != null && frame.timestamp - lastRecNs >= REC_PERIOD_NS) {
+            var camImg: android.media.Image? = null
+            var depImg: android.media.Image? = null
+            try {
+                camImg = frame.acquireCameraImage()
+                depImg = frame.acquireDepthImage16Bits()
+                val alNow = align
+                val heading = if (alNow != null) (Math.toDegrees(
+                    (yawPlanar + alNow.offsetRad).toDouble()).toFloat()
+                    + 360f) % 360f else Float.NaN
+                val upRot = (sensorOrientation -
+                    rotationDegrees(rotation) + 360) % 360
+                if (rec.submit(camImg, depImg, cam, speedMps, heading,
+                        alNow?.toLocalE(pose.tx(), pose.tz()) ?: Float.NaN,
+                        alNow?.toLocalN(pose.tx(), pose.tz()) ?: Float.NaN,
+                        upRot))
+                    lastRecNs = frame.timestamp
+            } catch (_: NotYetAvailableException) {
+                // depth needs a few seconds of parallax; retry next frame
+            } finally {
+                camImg?.close()
+                depImg?.close()
+            }
+        }
+
         val al = align ?: run { onUiUpdate?.invoke(); return }
 
         // --- overlay matrices ---
