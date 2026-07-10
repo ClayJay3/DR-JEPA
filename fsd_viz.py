@@ -471,7 +471,7 @@ class FSDRenderer:
 
         # ---- status (top left) ----
         self._panel(canvas, 18, 18, 240, 116)
-        _put(canvas, "DR-JEPA v10", (30, 44), 0.62, HUD_VALUE)
+        _put(canvas, "DR-JEPA v12", (30, 44), 0.62, HUD_VALUE)
         _put(canvas, "BELIEF-SPACE NAVIGATION", (30, 62), 0.36)
         d = float(np.linalg.norm(p.goal - p.pose))
         _put(canvas, "GOAL", (30, 88), 0.4)

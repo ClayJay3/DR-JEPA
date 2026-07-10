@@ -1,35 +1,31 @@
-"""RoverJEPA: an action-conditioned JEPA world model for goal-driven driving.
+"""RoverJEPA: map-space JEPA perception for goal-driven driving.
 
 Design (all sizes from ModelConfig):
 
-  frozen DINOv2 (precomputed)      7 tokens x 384 per frame
+  frozen DINOv2 (precomputed)      145 tokens x 384 per frame
         |
-  FrameEncoder  ------------------ 256-d frame embedding e_t
-        |            \
-  causal Transformer  EMA copy --- target embedding  ~e_t   (no grad)
+  MapDecoder (multi-frame + ego-motion)
+        |-- 5-channel metric wedge: occupancy / visibility / elevation /
+        |                           sand / tip-hazard (48x48 @ 0.5 m)
+        |-- danger logit: "trouble within ~1 s" from the same trunk
         |
-  belief state s_t (256)
-        |-- PolicyHead(s_t, goal ctx)         -> action chunk (H x 2, tanh)
-        |-- DangerHead(s_t)                   -> imminent-danger logit
-        |-- JEPAPredictor(s_t, actions, k)    -> predicted e_{t+k}
-                 |-- FutureDangerHead(e)      -> danger logit of a (predicted)
-                                                 future embedding
+  persistent belief map (fusion lives in drjepa.pilot)
+        |
+  MapCompleter (map-space JEPA)  -> predicted layout of UNSEEN map cells
+                                    (I-JEPA recipe: mask what the camera
+                                    has not swept, predict it from context)
 
-The JEPA objective: the predictor must regress the EMA target embedding of
-the frame k steps ahead, conditioned on the actions actually executed in
-between. This forces the belief state to carry controllable scene dynamics
-(an action-conditioned world model) rather than static appearance.
-VICReg-style variance/covariance regularization prevents collapse.
+The temporal/embedding JEPA branch (FrameEncoder, causal transformer, EMA
+target encoder, action-conditioned predictor, BC policy head) was REMOVED
+after v11: with the map pilot driving, its only inference output was the
+danger scalar, and a danger head on the perception trunk matches it
+without the extra ~2.5M parameters and per-step latency. The JEPA that
+survives is the one operating on the world model itself -- the map.
 
-At inference the predictor doubles as a one-step "imagination" engine: the
-latent safety shield rolls candidate action chunks through it and vetoes
-those whose predicted future embedding decodes to high danger.
-
-Total trainable parameters: ~4M. The DINOv2 backbone stays frozen, which is
-what preserves sim-to-real robustness of the visual features.
+The DINOv2 backbone stays frozen, which is what preserves sim-to-real
+robustness of the visual features.
 """
 
-import copy
 import math
 
 import torch
@@ -39,52 +35,21 @@ import torch.nn.functional as F
 from .config import ModelConfig
 
 
-class FrameEncoder(nn.Module):
-    """(B, T, n_tokens, feat_dim) DINOv2 tokens -> (B, T, embed_dim).
-
-    The stored token grid is fine (for metric mapping); the frame embedding
-    only needs coarse layout, so grid tokens are average-pooled to 4x4
-    before projection.
-    """
-
-    POOL = 4
-
-    def __init__(self, cfg: ModelConfig):
-        """Token projection + MLP head producing a LayerNormed embedding."""
-        super().__init__()
-        self.rows, self.cols = cfg.pool_rows, cfg.pool_cols
-        self.norm = nn.LayerNorm(cfg.feat_dim)
-        self.token_proj = nn.Linear(cfg.feat_dim, 128)
-        n_eff = self.POOL * self.POOL + 1
-        self.mlp = nn.Sequential(
-            nn.Linear(n_eff * 128, 512),
-            nn.GELU(),
-            nn.Linear(512, cfg.embed_dim),
-            nn.LayerNorm(cfg.embed_dim),
-        )
-
-    def forward(self, tokens):
-        """(..., n_tokens, feat_dim) -> (..., embed_dim) frame embeddings."""
-        lead = tokens.shape[:-2]
-        t = tokens.reshape(-1, tokens.shape[-2], tokens.shape[-1])
-        cls, grid = t[:, :1], t[:, 1:]
-        g = grid.view(-1, self.rows, self.cols, grid.shape[-1]).permute(0, 3, 1, 2)
-        g = F.adaptive_avg_pool2d(g, (self.POOL, self.POOL))
-        g = g.flatten(2).permute(0, 2, 1)
-        x = self.token_proj(self.norm(torch.cat([cls, g], dim=1)))
-        out = self.mlp(x.flatten(-2))
-        return out.reshape(*lead, -1)
-
-
 class MapDecoder(nn.Module):
     """Multi-frame metric perception: DINOv2 tokens -> terrain wedge.
 
     Predicts, for the 24m x 24m area in front of the camera (48x48 cells),
-    four per-cell quantities:
+    five per-cell quantities:
       occ  : obstacle logit (rocks, trees, bushes)
       conf : visibility/confidence logit (what the camera can actually see)
       elev : terrain elevation relative to the rover (metres, tanh-bounded)
       sand : soft-ground logit
+      haz  : steep-ground logit, supervised DIRECTLY on true terrain grade.
+             Gradients of the predicted (smoothed) elevation carry no
+             usable steepness signal -- measured: true 0.5-grade banks got
+             LOWER predicted gradients than mild slopes -- so the decoder
+             classifies steepness from visual cues (bank shading, texture)
+             instead of us differentiating its regression output.
     The decoder sees the current frame plus cfg.frame_offsets lookbacks
     (channel-stacked per grid position) together with the ego-motion of
     those frames (speed + commanded steer), so it can exploit motion
@@ -109,14 +74,25 @@ class MapDecoder(nn.Module):
         for i in range(n_up):                    # e.g. 12x12 -> 48x48
             layers += [nn.ConvTranspose2d(ch[i], ch[i + 1], 4, 2, 1), nn.GELU(),
                        nn.Conv2d(ch[i + 1], ch[i + 1], 3, 1, 1), nn.GELU()]
-        self.net = nn.Sequential(*layers, nn.Conv2d(ch[n_up], 4, 3, 1, 1))
+        self.net = nn.Sequential(*layers, nn.Conv2d(ch[n_up], 5, 3, 1, 1))
+        # danger head on the SAME perception trunk: strided convs keep the
+        # spatial layout (a rock dead ahead is not a rock off to the side)
+        # before pooling into a scalar "trouble within ~1 s" logit. The
+        # trunk already fuses multi-frame parallax + ego-motion, which is
+        # everything a 1 s-horizon outcome estimate needs.
+        self.danger_net = nn.Sequential(
+            nn.Conv2d(256, 128, 3, 2, 1), nn.GELU(),   # 12x12 -> 6x6
+            nn.Conv2d(128, 128, 3, 2, 1), nn.GELU())   # 6x6  -> 3x3
+        self.danger_out = nn.Sequential(
+            nn.Linear(128 * 3 * 3 + 64, 128), nn.GELU(), nn.Linear(128, 1))
 
     def forward(self, tokens, motion):
         """tokens (..., F, n_tokens, feat_dim) stacked [current, -2, -4, ...];
         motion (..., F*2) = (speed, steer) per stacked frame.
-        Returns (occ, conf, elev, sand), each (..., C, C) indexed
-        [i = x_right, j = z_forward] (rover frame). occ/conf/sand are
-        logits; elev is metres."""
+        Returns (occ, conf, elev, sand, haz, danger): the first five
+        (..., C, C) indexed [i = x_right, j = z_forward] (rover frame),
+        danger a (...,) scalar logit for "trouble within ~1 s".
+        occ/conf/sand/haz/danger are logits; elev is metres."""
         lead = tokens.shape[:-3]
         F_, nt, fd = tokens.shape[-3:]
         t = tokens.reshape(-1, F_, nt, fd)
@@ -127,7 +103,9 @@ class MapDecoder(nn.Module):
         x = self.token_proj(torch.cat([grid, c[:, None].expand(-1, nt - 1, -1)],
                                       dim=-1))
         x = x.view(-1, self.rows, self.cols, 256).permute(0, 3, 1, 2)
-        out = self.net(x)                        # (N, 4, cells, cells)
+        d = self.danger_net(x).flatten(1)                  # (N, 128*3*3)
+        danger = self.danger_out(torch.cat([d, c], dim=-1))  # (N, 1)
+        out = self.net(x)                        # (N, 5, cells, cells)
         # conv output is image-aligned (row ~ image-y ~ distance-from-far,
         # col ~ image-x ~ lateral); re-index to the rover-frame (i, j)
         # convention so convs only learn a local perspective warp, never a
@@ -138,7 +116,9 @@ class MapDecoder(nn.Module):
         conf = out[:, 1].reshape(shape)
         elev = self.ELEV_RANGE * torch.tanh(out[:, 2]).reshape(shape)
         sand = out[:, 3].reshape(shape)
-        return occ, conf, elev, sand
+        haz = out[:, 4].reshape(shape)
+        danger = danger.reshape(lead) if lead else danger.reshape(())
+        return occ, conf, elev, sand, haz, danger
 
 
 class MapCompleter(nn.Module):
@@ -189,160 +169,31 @@ class MapCompleter(nn.Module):
         return self.head(d1)
 
 
-class TemporalEncoder(nn.Module):
-    """Causal transformer over frame embeddings -> belief states."""
-
-    def __init__(self, cfg: ModelConfig):
-        """Pre-norm causal transformer with learned positional embeddings."""
-        super().__init__()
-        self.pos = nn.Parameter(torch.zeros(1, cfg.seq_len, cfg.embed_dim))
-        nn.init.trunc_normal_(self.pos, std=0.02)
-        layer = nn.TransformerEncoderLayer(
-            d_model=cfg.embed_dim, nhead=cfg.n_heads,
-            dim_feedforward=cfg.embed_dim * 4, dropout=cfg.dropout,
-            batch_first=True, norm_first=True, activation="gelu")
-        self.encoder = nn.TransformerEncoder(layer, num_layers=cfg.n_layers)
-        self.out_norm = nn.LayerNorm(cfg.embed_dim)
-
-    def forward(self, e):
-        """Frame embeddings (B, S, E) -> belief states (B, S, E).
-
-        The causal mask means belief s_t only sees frames <= t, so training
-        beliefs match what streaming inference can actually compute.
-        """
-        S = e.shape[1]
-        x = e + self.pos[:, :S]
-        mask = nn.Transformer.generate_square_subsequent_mask(S, device=e.device)
-        return self.out_norm(self.encoder(x, mask=mask, is_causal=True))
-
-
-class JEPAPredictor(nn.Module):
-    """(s_t, executed actions t..t+k-1, offset k) -> predicted e_{t+k}."""
-
-    def __init__(self, cfg: ModelConfig):
-        """MLP conditioned on a learned embedding of the horizon offset k."""
-        super().__init__()
-        self.k_max = max(cfg.jepa_offsets)
-        self.offset_emb = nn.Embedding(len(cfg.jepa_offsets), 32)
-        self.net = nn.Sequential(
-            nn.Linear(cfg.embed_dim + self.k_max * 2 + 32, 512),
-            nn.GELU(),
-            nn.Linear(512, 512),
-            nn.GELU(),
-            nn.Linear(512, cfg.embed_dim),
-        )
-
-    def forward(self, s, actions_flat, offset_idx):
-        """s: (N, E); actions_flat: (N, k_max*2) zero-padded; offset_idx: int."""
-        k = self.offset_emb.weight[offset_idx].expand(s.shape[0], -1)
-        return self.net(torch.cat([s, actions_flat, k], dim=-1))
-
-
 class RoverJEPA(nn.Module):
-    """The full trainable model: shared encoder + all task heads.
+    """The full trainable model: metric perception + map-space JEPA.
 
-    See the module docstring for the architecture diagram. Everything here
-    trains jointly in `compute_losses`; inference-side orchestration
-    (map fusion, planning, control) lives in `drjepa.pilot`.
+    Two submodules: the MapDecoder (tokens -> 5-channel wedge + danger
+    logit) and the MapCompleter (partial belief map -> predicted hidden
+    cells). Everything trains jointly in `compute_losses`; inference-side
+    orchestration (map fusion, planning, control) lives in `drjepa.pilot`.
     """
 
     def __init__(self, cfg: ModelConfig = None):
-        """Build all submodules and the frozen EMA target encoder."""
+        """Build the perception decoder and the map completer."""
         super().__init__()
         self.cfg = cfg = cfg or ModelConfig()
-
-        self.frame_encoder = FrameEncoder(cfg)
-        self.target_encoder = copy.deepcopy(self.frame_encoder)
-        for p in self.target_encoder.parameters():
-            p.requires_grad = False
-
-        self.temporal = TemporalEncoder(cfg)
-        self.predictor = JEPAPredictor(cfg)
         self.map_decoder = MapDecoder(cfg)
         self.map_completer = MapCompleter(cfg)
-
-        # steering is CLASSIFIED over bins: obstacle dodging is multimodal
-        # (left or right both valid) and regression averages the modes into
-        # "drive straight at the rock". throttle stays a regression.
-        self.policy = nn.Sequential(
-            nn.Linear(cfg.embed_dim + cfg.ctx_dim, 512),
-            nn.GELU(),
-            nn.Linear(512, 256),
-            nn.GELU(),
-            nn.Linear(256, cfg.action_horizon * (cfg.steer_bins + 1)),
-        )
-        self.register_buffer(
-            "bin_centers", torch.linspace(-1.0, 1.0, cfg.steer_bins),
-            persistent=False)
-        self.danger_head = nn.Sequential(
-            nn.Linear(cfg.embed_dim, 128), nn.GELU(), nn.Linear(128, 1))
-        self.future_danger_head = nn.Sequential(
-            nn.Linear(cfg.embed_dim, 128), nn.GELU(), nn.Linear(128, 1))
-        # regresses 10 * (goal_dist_{t+k} - goal_dist_t) (normalized units)
-        # from the embedding delta plus goal context, so imagined futures can
-        # be scored on goal progress (visual motion alone can't know the
-        # goal direction -- that comes from ctx)
-        self.progress_head = nn.Sequential(
-            nn.Linear(cfg.embed_dim + cfg.ctx_dim, 128), nn.GELU(),
-            nn.Linear(128, 1))
-
-    # ------------------------------------------------------------------
-    @torch.no_grad()
-    def update_ema(self, decay):
-        """Nudge the frozen target encoder toward the online frame encoder.
-
-        The slow-moving copy provides the JEPA regression targets; without
-        it the encoder could trivially collapse to a constant embedding.
-        """
-        for pt, po in zip(self.target_encoder.parameters(),
-                          self.frame_encoder.parameters()):
-            pt.mul_(decay).add_(po, alpha=1 - decay)
-
-    def embed(self, tokens):
-        """Backbone tokens -> frame embedding e_t (online encoder)."""
-        return self.frame_encoder(tokens)
-
-    def belief(self, e_seq):
-        """Frame-embedding sequence -> belief-state sequence."""
-        return self.temporal(e_seq)
-
-    def policy_raw(self, s, ctx):
-        """(steer logits (N, H, K), throttle (N, H))."""
-        cfg = self.cfg
-        out = self.policy(torch.cat([s, ctx], dim=-1))
-        out = out.view(-1, cfg.action_horizon, cfg.steer_bins + 1)
-        return out[..., :cfg.steer_bins], torch.tanh(out[..., cfg.steer_bins])
-
-    def act(self, s, ctx):
-        """Belief + goal context -> decoded action chunk (N, H, 2).
-
-        Steering decodes as the argmax bin (the mode), which commits to one
-        side of an obstacle instead of averaging the options.
-        """
-        logits, thr = self.policy_raw(s, ctx)
-        steer = self.bin_centers[logits.argmax(dim=-1)]
-        return torch.stack([thr, steer], dim=-1)
-
-    def danger(self, s):
-        """Belief state -> imminent-danger logit (sigmoid for probability)."""
-        return self.danger_head(s)
-
-    def predict_future(self, s, exec_actions, offset_idx):
-        """Imagine the frame embedding jepa_offsets[offset_idx] steps ahead
-        given a belief state and the actions that would be executed."""
-        return self.predictor(s, exec_actions, offset_idx)
 
     # ------------------------------------------------------------------
     def compute_losses(self, batch, train_cfg):
         """All training losses for one batch (dict of tensors).
 
-        batch keys (W = seq_len + k_max, C = wedge_cells, G = comp_cells):
+        batch keys actually consumed (W = window, C = wedge_cells,
+        G = comp_cells) -- the dataset may carry extra keys (expert action
+        labels etc.) which are simply ignored here:
           tokens    (B, W, n_tokens, feat_dim)  frozen backbone features
-          label     (B, W, 2)   clean expert action labels
-          execu     (B, W, 2)   executed (noise-injected) actions
-          ctx       (B, S, ctx_dim)   goal context per frame
-          danger    (B, W, 1)   in [0, 1]
-          dist      (B, W, 1)   normalized goal distance per frame
+          danger    (B, W, 1)   "trouble within ~1 s" in [0, 1]
           occ/vis   (B, W, C, C)  wedge occupancy / visibility targets
           elev      (B, W, C, C)  wedge elevation targets (metres)
           sand      (B, W, C, C)  wedge soft-ground targets in [0, 1]
@@ -353,41 +204,10 @@ class RoverJEPA(nn.Module):
         """
         cfg = self.cfg
         tokens = batch["tokens"]
-        label_actions = batch["label"]
-        exec_actions = batch["execu"]
-        ctx, danger, dist = batch["ctx"], batch["danger"], batch["dist"]
+        danger = batch["danger"]
         occ_gt, vis_gt = batch["occ"], batch["vis"]
         motion = batch["motion"]
-        S = cfg.seq_len
-        H = cfg.action_horizon
-        k_max = max(cfg.jepa_offsets)
         B, W = tokens.shape[:2]
-
-        e_all = self.frame_encoder(tokens)                    # (B, W, E)
-        with torch.no_grad():
-            e_tgt = self.target_encoder(tokens)               # (B, W, E)
-        s = self.temporal(e_all[:, :S])                       # (B, S, E)
-        s_flat = s.reshape(B * S, -1)
-
-        # ---------------- policy (behavior cloning) ----------------
-        logits, thr = self.policy_raw(s_flat, ctx.reshape(B * S, -1))
-        tgt_chunks = label_actions.unfold(1, H, 1)            # (B, W-H+1, 2, H)
-        tgt_chunks = tgt_chunks[:, :S].permute(0, 1, 3, 2).reshape(B * S, H, 2)
-        tgt_steer = tgt_chunks[..., 1]
-        K = cfg.steer_bins
-        tgt_bin = ((tgt_steer + 1.0) / 2.0 * (K - 1)).round().long().clamp(0, K - 1)
-        w_steer = 1.0 + 2.0 * tgt_steer.abs()
-        ce = F.cross_entropy(logits.reshape(-1, K), tgt_bin.reshape(-1),
-                             reduction="none", label_smoothing=0.05)
-        l_str = (w_steer.reshape(-1) * ce).mean()
-        l_thr = F.smooth_l1_loss(thr, tgt_chunks[..., 0])
-        l_jerk = ((thr[:, 1:] - thr[:, :-1]) ** 2).mean()
-        loss_action = l_thr + l_str + train_cfg.w_jerk * l_jerk
-
-        # ---------------- danger heads ----------------
-        d_logit = self.danger_head(s_flat)
-        loss_safety = F.binary_cross_entropy_with_logits(
-            d_logit, danger[:, :S].reshape(B * S, 1))
 
         # ---------------- metric perception (occupancy wedge) ----------------
         # stack the multi-frame input with strided slices; supervise every
@@ -398,12 +218,23 @@ class RoverJEPA(nn.Module):
             [tokens[:, m_off - o:W - o:2] for o in offs], dim=2)
         mot_stack = torch.cat(
             [motion[:, m_off - o:W - o:2] for o in offs], dim=-1)
-        occ_logit, conf_logit, elev_pred, sand_logit = \
-            self.map_decoder(tok_stack, mot_stack)
+        occ_logit, conf_logit, elev_pred, sand_logit, haz_logit, \
+            d_logit = self.map_decoder(tok_stack, mot_stack)
         occ_gt = occ_gt[:, m_off::2]
         vis_gt = vis_gt[:, m_off::2]
         elev_gt = batch["elev"][:, m_off::2]
         sand_gt = batch["sand"][:, m_off::2]
+        # steep-ground target from the GT elevation wedge (exact geometry).
+        # The ramp is anchored TIGHT on the tip-over threshold (0.38 ->
+        # tip_roll 0.50): this channel must mean "can tip the rover", not
+        # "sloped". A wider ramp from 0.30 was tried first and walled off
+        # perfectly drivable 0.3-0.4 hillsides once fused (log-odds
+        # saturation erases the moderate/fatal distinction downstream, so
+        # the distinction must be drawn in the label).
+        ggx, ggz = torch.gradient(elev_gt, spacing=cfg.wedge_res,
+                                  dim=(-2, -1))
+        grade_gt = torch.sqrt(ggx * ggx + ggz * ggz)
+        haz_gt = ((grade_gt - 0.38) / 0.12).clamp(0.0, 1.0)
         C = occ_logit.shape[-1]
         # nearer rows matter more for driving; beyond wedge_range_cells the
         # monocular distance ambiguity is too large to supervise usefully
@@ -422,6 +253,13 @@ class RoverJEPA(nn.Module):
         loss_sand = (F.binary_cross_entropy_with_logits(
             sand_logit, sand_gt, reduction="none") * w).sum() / \
             w.sum().clamp(min=1.0)
+        # steep cells are rare (~2-4%); pos_weight keeps recall alive.
+        # missing a bank tips the rover -- terminal -- while a false alarm
+        # only costs a detour
+        loss_haz = (F.binary_cross_entropy_with_logits(
+            haz_logit, haz_gt, reduction="none",
+            pos_weight=torch.tensor(4.0, device=haz_logit.device))
+            * w).sum() / w.sum().clamp(min=1.0)
         loss_map = loss_occ + 0.25 * loss_conf
         with torch.no_grad():
             R = cfg.wedge_range_cells
@@ -430,45 +268,6 @@ class RoverJEPA(nn.Module):
             inter = (pred & gt).sum()
             union = (pred | gt).sum().clamp(min=1)
             occ_iou = float(inter) / float(union)
-
-        # ---------------- JEPA world model ----------------
-        # exec action windows: (B, W-k_max+1, 2, k_max) -> (B, S, k_max*2)
-        act_windows = exec_actions.unfold(1, k_max, 1)[:, :S]
-        act_windows = act_windows.permute(0, 1, 3, 2).reshape(B, S, k_max * 2)
-
-        loss_jepa = 0.0
-        loss_fdanger = 0.0
-        loss_prog = 0.0
-        n_prog = 0
-        for i, k in enumerate(cfg.jepa_offsets):
-            acts = act_windows.clone()
-            acts[:, :, 2 * k:] = 0.0                          # mask beyond k
-            e_hat = self.predictor(s_flat, acts.reshape(B * S, -1), i)
-            tgt = e_tgt[:, k:S + k].reshape(B * S, -1)
-            loss_jepa = loss_jepa + F.smooth_l1_loss(e_hat, tgt)
-
-            d_fut = danger[:, k:S + k].reshape(B * S, 1)
-            loss_fdanger = loss_fdanger + 0.5 * (
-                F.binary_cross_entropy_with_logits(
-                    self.future_danger_head(e_all[:, k:S + k].reshape(B * S, -1)),
-                    d_fut) +
-                F.binary_cross_entropy_with_logits(
-                    self.future_danger_head(e_hat.detach()), d_fut))
-
-            if k >= 4:  # short offsets are dominated by GPS noise
-                prog_tgt = 10.0 * (dist[:, k:S + k] - dist[:, :S]).reshape(B * S, 1)
-                e_now = e_all[:, :S].reshape(B * S, -1).detach()
-                ctx_flat = ctx.reshape(B * S, -1)
-                loss_prog = loss_prog + 0.5 * (
-                    F.smooth_l1_loss(self.progress_head(torch.cat(
-                        [e_all[:, k:S + k].reshape(B * S, -1) - e_now,
-                         ctx_flat], dim=-1)), prog_tgt) +
-                    F.smooth_l1_loss(self.progress_head(torch.cat(
-                        [e_hat.detach() - e_now, ctx_flat], dim=-1)), prog_tgt))
-                n_prog += 1
-        loss_jepa = loss_jepa / len(cfg.jepa_offsets)
-        loss_fdanger = loss_fdanger / len(cfg.jepa_offsets)
-        loss_prog = loss_prog / max(1, n_prog)
 
         # ---------------- map-space JEPA (hidden-map completion) ----------------
         comp_logit = self.map_completer(batch["comp_in"])     # (B, 3, G, G)
@@ -486,40 +285,31 @@ class RoverJEPA(nn.Module):
             hg = (batch["comp_tgt"][:, 0] > 0.5) & (hidden[:, 0] > 0.5)
             comp_iou = float((hp & hg).sum()) / float((hp | hg).sum().clamp(min=1))
 
-        # ---------------- anti-collapse regularization ----------------
-        e_flat = e_all[:, :S].reshape(B * S, -1)
-        e_c = e_flat - e_flat.mean(dim=0)
-        std = torch.sqrt(e_c.var(dim=0) + 1e-4)
-        loss_var = F.relu(1.0 - std).mean()
-        cov = (e_c.T @ e_c) / (e_c.shape[0] - 1)
-        D = cov.shape[0]
-        loss_cov = (cov.pow(2).sum() - cov.diagonal().pow(2).sum()) / D
+        # ---------------- danger (same trunk as the wedge) ----------------
+        # supervised on the decoder's frames; the label is the sim's
+        # "trouble within ~1 s" outcome signal
+        d_gt = danger[:, m_off::2].reshape(-1, 1)
+        loss_danger = F.binary_cross_entropy_with_logits(
+            d_logit.reshape(-1, 1), d_gt)
 
-        total = (train_cfg.w_action * loss_action
-                 + train_cfg.w_safety * (loss_safety + loss_fdanger)
-                 + train_cfg.w_jepa * loss_jepa
-                 + train_cfg.w_map * loss_map
+        total = (train_cfg.w_map * loss_map
                  + train_cfg.w_elev * loss_elev
                  + train_cfg.w_sand * loss_sand
+                 + train_cfg.w_haz * loss_haz
                  + train_cfg.w_complete * loss_comp
-                 + train_cfg.w_progress * loss_prog
-                 + train_cfg.w_reg * (loss_var + loss_cov))
+                 + train_cfg.w_safety * loss_danger)
 
         return total, {
-            "act": float(loss_action.detach()),
-            "safe": float(loss_safety.detach()),
-            "fsafe": float(loss_fdanger.detach()),
-            "jepa": float(loss_jepa.detach()),
+            "safe": float(loss_danger.detach()),
             "map": float(loss_map.detach()),
             "elev": float(loss_elev.detach()),
             "sand": float(loss_sand.detach()),
+            "haz": float(loss_haz.detach()),
             "comp": float(loss_comp.detach()),
             "ciou": comp_iou,
             "iou": occ_iou,
-            "prog": float(loss_prog.detach()),
-            "var": float(loss_var.detach()),
-            "cov": float(loss_cov.detach()),
         }
+
 
 
 # ==========================================================================

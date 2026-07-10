@@ -62,15 +62,14 @@ class ModelConfig:
     comp_cells: int = 80             # completion crop (80 m x 80 m @ 1 m)
     comp_res: float = 1.0
 
-    embed_dim: int = 256             # frame embedding / belief state width
-    seq_len: int = 12                # temporal context (1.2 s at 10 Hz)
-    n_layers: int = 3                # causal transformer depth
-    n_heads: int = 4
-    dropout: float = 0.1
-
-    action_horizon: int = 8          # predicted action chunk length
-    steer_bins: int = 15             # steering is classified (multimodal), not regressed
-    jepa_offsets: tuple = (1, 4, 8)  # future frames the world model predicts
+    # Training-window geometry (also used by the dataset loader). The
+    # temporal/embedding JEPA branch was removed after v11; seq_len and
+    # jepa_offsets survive only to size dataset windows (W = seq_len +
+    # max(jepa_offsets)), and action_horizon/ctx_dim to shape logged
+    # label/context arrays the loss no longer consumes.
+    seq_len: int = 12
+    jepa_offsets: tuple = (1, 4, 8)
+    action_horizon: int = 8
     ctx_dim: int = 4                 # [dist, sin(bearing), cos(bearing), speed]
 
     # Context normalization
@@ -87,26 +86,21 @@ class TrainConfig:
     min_lr: float = 1e-5
     warmup_epochs: int = 3
     weight_decay: float = 0.05
-    ema_decay: float = 0.995         # JEPA target-encoder EMA
     patience: int = 12
     val_split: float = 0.15          # fraction of episodes held out
     window_stride: int = 6           # frames between training windows
     num_workers: int = 8
 
     # Loss weights
-    w_action: float = 1.0
-    w_safety: float = 0.5
-    w_jepa: float = 0.5
+    w_safety: float = 0.5            # danger head ("trouble within ~1 s")
     w_map: float = 2.0               # occupancy-wedge prediction (primary)
     w_elev: float = 1.0              # elevation regression (terrain wedge)
     w_sand: float = 0.5              # soft-ground classification
+    w_haz: float = 1.0               # steep-ground classification (tip risk)
     w_complete: float = 1.0          # map-space JEPA (hidden-map prediction)
     occ_pos_weight: float = 1.5      # mild: the fusion prior handles the
     #                                  base rate; large values fatten the
     #                                  false-positive tail that pollutes maps
-    w_progress: float = 0.5          # goal-progress regression on futures
-    w_reg: float = 0.1               # VICReg variance+covariance anti-collapse
-    w_jerk: float = 0.3              # action-chunk smoothness penalty
     dagger_weight: float = 0.5       # sampling weight for DAgger episodes
 
 
