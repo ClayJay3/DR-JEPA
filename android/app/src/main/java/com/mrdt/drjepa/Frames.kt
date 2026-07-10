@@ -39,11 +39,9 @@ class FrameConverter(private val size: Int) {
         } else {
             // the last row may be shorter than the stride; pad through a
             // reused staging buffer
-            var st = staging
-            if (st == null || st.capacity() < need) {
-                st = java.nio.ByteBuffer.allocate(need)
-                staging = st
-            }
+            val st: java.nio.ByteBuffer =
+                staging?.takeIf { it.capacity() >= need }
+                    ?: java.nio.ByteBuffer.allocate(need).also { staging = it }
             st.clear()
             st.put(plane.buffer)
             st.rewind()
