@@ -103,8 +103,8 @@ Back on the workstation:
 adb pull /sdcard/Android/data/com.mrdt.drjepa/files/collect
 python real2dataset.py --sessions collect/rec_* --output data_real
 python real2dataset.py --selftest        # geometry sanity check
-python drjepa.py preprocess --data data_sim,data_real --out packed
-python drjepa.py train --data packed ...
+python drjepa.py preprocess --data data_v11,data_v11_wall,data_real --out packed
+python drjepa.py train --dataset packed  # --real_weight auto is the default
 ```
 
 `real2dataset.py` unprojects each depth image through its recorded pose
@@ -116,6 +116,19 @@ the short depth range just supervises fewer cells. The resulting
 episodes mix with simulator data in `preprocess`/`train` with **zero
 trainer changes** — real episodes simply contribute nothing to the map
 completer, which needs ground-truth grids only the sim has.
+
+**Balancing sim vs real.** Real frames are hugely outnumbered by sim, so
+`train` reweights them. `--real_weight auto` (default) lifts real to a
+capped share of the sampled signal; pass a float to override, or `0` to
+exclude real for an A/B. Episodes are tagged real at pack time by the
+absence of ground-truth grids (naming-independent — renamed captures
+still classify correctly). The split is stratified: some real episodes
+go to a **separate real validation set**, printed each epoch as a
+`REAL val` line (map loss + occupancy IoU + hazard) so you can watch
+sim-to-real transfer directly. Checkpoint selection stays on the sim val
+score — a handful of real episodes is too noisy to select on — so the
+`REAL val` numbers are a diagnostic, not the objective, until you have
+enough real data (≥10 episodes, a few held out) to select on them.
 
 ## Deliberate deviations from the sim pilot
 

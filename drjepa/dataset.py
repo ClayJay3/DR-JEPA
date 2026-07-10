@@ -30,6 +30,15 @@ META_COLS = 12
 
 DANGER_LOOKAHEAD = 10  # frames: "danger" = worst traversability soon
 
+# auto real_weight policy (drjepa.py train --real_weight auto)
+REAL_TARGET_SHARE = 0.25   # aim for real episodes to be this fraction of the
+#                            sampled training signal -- a strong minority that
+#                            teaches the missing real classes without letting
+#                            a handful of scenes overwrite sim's broad coverage
+REAL_WEIGHT_CAP = 25.0     # never oversample one window past this: repetition
+#                            cannot manufacture scene diversity, so beyond the
+#                            cap you only memorize the few real captures
+
 
 def _episode_meta(df, cfg: Config):
     """Per-frame context + labels from a telemetry dataframe -> (N, 12)."""
@@ -110,6 +119,10 @@ def preprocess(data_dir, out_dir, cfg: Config = None, batch_size=160,
 
     backbone = Backbone(cfg.model, device=device)
     write = 0
+    # provenance: episodes with no GT grids are real (phone) captures --
+    # the simulator always emits gt_*, real2dataset.py never does. Recorded
+    # here so the trainer classifies real/sim without filename guessing.
+    ep_is_real = []
     print(f"Packing {len(pairs)} episodes / {total} frames -> {out_dir}")
     for ep_id, (vp, cp) in enumerate(tqdm(pairs)):
         df = pd.read_csv(cp)
@@ -119,6 +132,7 @@ def preprocess(data_dir, out_dir, cfg: Config = None, batch_size=160,
 
         wedge_path = os.path.splitext(vp)[0] + ".npz"
         occ_ep = vis_ep = elev_ep = sand_ep = None
+        has_gt = False
         if os.path.exists(wedge_path):
             z = np.load(wedge_path)
             occ_ep, vis_ep = z["occ"], z["vis"]
@@ -126,11 +140,13 @@ def preprocess(data_dir, out_dir, cfg: Config = None, batch_size=160,
             sand_ep = z["sand"] if "sand" in z.files else None
             if "gt_occ" in z.files:
                 # episode ground-truth grids feed map-completion training
+                has_gt = True
                 np.savez_compressed(
                     os.path.join(out_dir, "gt", f"ep{ep_id}.npz"),
                     occ=z["gt_occ"], hazard=z["gt_hazard"],
                     sand=z["gt_sand"], origin=z["gt_origin"],
                     res=z["gt_res"])
+        ep_is_real.append(not has_gt)
 
         cap = cv2.VideoCapture(vp)
         buf = []
@@ -169,7 +185,8 @@ def preprocess(data_dir, out_dir, cfg: Config = None, batch_size=160,
     ep_names = np.array([os.path.basename(v) for v, _ in pairs])
     np.savez(os.path.join(out_dir, "info.npz"), count=write,
              n_tokens=nt, feat_dim=fd, episodes=len(pairs),
-             ep_names=ep_names, wedge_cells=cfg.model.wedge_cells)
+             ep_names=ep_names, wedge_cells=cfg.model.wedge_cells,
+             is_real=np.array(ep_is_real, dtype=bool))
     print(f"Done: {write} frames, feats {feats.nbytes / 1e9:.2f} GB")
 
 
@@ -177,13 +194,18 @@ def preprocess(data_dir, out_dir, cfg: Config = None, batch_size=160,
 class SeqDataset(Dataset):
     """Sliding windows of precomputed features for RoverJEPA training."""
 
-    def __init__(self, data_dir, cfg: Config, is_val=False):
+    def __init__(self, data_dir, cfg: Config, is_val=False, domain=None):
         """Index sliding windows over a packed dataset.
 
         Windows never straddle episode boundaries, the train/val split is
         by whole episodes (seeded, deterministic -- no leakage), and DAgger
         episodes get a reduced sampling weight.
+
+        `domain` restricts to one source when set: "sim" or "real". Used to
+        build a real-only validation set so sim-to-real transfer can be
+        watched separately from the sim val loss that selects checkpoints.
         """
+        assert domain in (None, "sim", "real")
         self.cfg = cfg
         mc = cfg.model
         self.S = mc.seq_len
@@ -206,32 +228,109 @@ class SeqDataset(Dataset):
         info = np.load(os.path.join(data_dir, "info.npz"), allow_pickle=True)
         ep_names = info["ep_names"] if "ep_names" in info.files else None
 
-        # deterministic episode-level split (no leakage between train/val)
+        # real (phone) vs sim episodes. Recorded at pack time as is_real
+        # (episodes with no GT grids); for packs made before that field
+        # existed, fall back to probing the gt/ dir -- both are naming-
+        # independent, so renamed real files (rec1/rec2/...) classify right.
+        if "is_real" in info.files:
+            is_real_arr = np.asarray(info["is_real"], bool)
+
+            def ep_is_real(e):
+                return bool(is_real_arr[int(e)])
+        else:
+            def ep_is_real(e):
+                return not os.path.exists(
+                    os.path.join(self.data_dir, "gt", f"ep{int(e)}.npz"))
+
+        # deterministic episode-level split (no leakage), stratified by
+        # domain so both sim and real are represented in train AND val --
+        # real val is how sim-to-real transfer is measured. Sim and real are
+        # permuted with the same seeded rng but sim FIRST, so a sim-only
+        # dataset reproduces the original split byte-for-byte.
         eps = np.unique(ep_ids)
+        real_eps = np.array([e for e in eps if ep_is_real(e)], eps.dtype)
+        sim_eps = np.array([e for e in eps if not ep_is_real(e)], eps.dtype)
         rng = np.random.default_rng(42)
-        eps = rng.permutation(eps)
-        n_val = max(1, int(len(eps) * cfg.train.val_split))
-        chosen = set((eps[-n_val:] if is_val else eps[:-n_val]).tolist())
+        sim_perm = rng.permutation(sim_eps)
+        n_val_sim = max(1, int(len(sim_perm) * cfg.train.val_split))
+        sim_val = set(sim_perm[-n_val_sim:].tolist())
+        sim_train = set(sim_perm[:-n_val_sim].tolist())
+        real_val, real_train = set(), set()
+        if len(real_eps):
+            real_perm = rng.permutation(real_eps)
+            # at least one real episode in val (transfer needs a real signal);
+            # keep at least one in train too when >= 2 exist
+            n_val_real = max(1, round(len(real_perm) * cfg.train.val_split))
+            n_val_real = min(n_val_real, max(1, len(real_perm) - 1))
+            real_val = set(real_perm[-n_val_real:].tolist())
+            real_train = set(real_perm[:-n_val_real].tolist()) \
+                if n_val_real < len(real_perm) else set()
+
+        if is_val:
+            chosen = (real_val if domain == "real" else
+                      sim_val if domain == "sim" else sim_val | real_val)
+        else:
+            chosen = sim_train | real_train
+            if domain == "sim":
+                chosen = sim_train
+            elif domain == "real":
+                chosen = real_train
 
         self.starts = []
-        weights = []
+        kinds = []                 # per window: 0 = sim, 1 = dagger, 2 = real
         stride = cfg.train.window_stride
         for ep in np.unique(ep_ids):
             if int(ep) not in chosen:
                 continue
-            # DAgger episodes carry corrective labels for off-policy states;
-            # downweight them so they inform without dominating
-            w = 1.0
-            if ep_names is not None and str(ep_names[int(ep)]).startswith("dag_"):
-                w = cfg.train.dagger_weight
+            if ep_is_real(ep):
+                kind = 2
+            elif ep_names is not None and \
+                    str(ep_names[int(ep)]).startswith("dag_"):
+                # DAgger: corrective off-policy labels -- inform, don't dominate
+                kind = 1
+            else:
+                kind = 0
             idx = np.flatnonzero(ep_ids == ep)
             for s in range(idx[0], idx[-1] - self.W + 2, stride):
                 self.starts.append(s)
-                weights.append(w)
+                kinds.append(kind)
         self.starts = np.array(self.starts, dtype=np.int64)
-        self.weights = np.array(weights, dtype=np.float64)
-        print(f"  {'val' if is_val else 'train'}: {len(chosen)} episodes, "
-              f"{len(self.starts)} windows")
+        kinds = np.array(kinds, dtype=np.int64)
+
+        # per-window sampling weights: dagger down, real up (or fixed) to
+        # close the sim/real frame imbalance
+        w = np.ones(len(kinds), np.float64)
+        w[kinds == 1] = cfg.train.dagger_weight
+        n_real = int((kinds == 2).sum())
+        real_w, sim_mass, capped = 1.0, 0.0, False
+        if n_real > 0:
+            sim_mass = float(w[kinds != 2].sum())       # dagger already scaled
+            if cfg.train.real_weight >= 0:              # fixed
+                real_w = float(cfg.train.real_weight)
+            elif sim_mass > 0:                          # auto-balance
+                p = REAL_TARGET_SHARE
+                raw = p / (1.0 - p) * sim_mass / n_real
+                real_w = min(REAL_WEIGHT_CAP, max(1.0, raw))
+                capped = raw > REAL_WEIGHT_CAP
+            w[kinds == 2] = real_w
+        self.weights = w
+        self.n_real_eps = len(real_eps)
+        self.n_real_val = len(real_val)
+
+        tag = ("val" if is_val else "train") + (f" ({domain})" if domain else "")
+        msg = f"  {tag}: {len(chosen)} episodes, {len(self.starts)} windows"
+        if not is_val and n_real > 0:
+            share = real_w * n_real / (sim_mass + real_w * n_real)
+            mode = "auto" if cfg.train.real_weight < 0 else "fixed"
+            msg += (f"\n    real train: {len(real_train)} episodes / "
+                    f"{n_real} windows @ weight {real_w:.1f} ({mode}) -> "
+                    f"~{share * 100:.0f}% of the sampled signal"
+                    + (" [capped]" if capped else ""))
+            if len(real_eps) < 10:
+                msg += (f"\n    NOTE: only {len(real_eps)} real episode(s) "
+                        "total -- upweighting just repeats these scenes; "
+                        "collect more sessions for real generalization")
+        print(msg)
 
     def __len__(self):
         """Number of training windows."""

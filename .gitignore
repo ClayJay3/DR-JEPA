@@ -3,6 +3,12 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Model folders.
+data_real/
+data_v11/
+data_v11_wall/
+real_dataset/
+
 # Generated synthetic files
 data_synthetic_unicycle/
 

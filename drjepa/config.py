@@ -102,6 +102,11 @@ class TrainConfig:
     #                                  base rate; large values fatten the
     #                                  false-positive tail that pollutes maps
     dagger_weight: float = 0.5       # sampling weight for DAgger episodes
+    real_weight: float = -1.0        # sampling weight for real (phone-
+    #                                  captured) episodes; < 0 = auto-balance
+    #                                  real up to REAL_TARGET_SHARE of the
+    #                                  sampled signal (capped, see dataset.py),
+    #                                  >= 0 = use this fixed weight
 
 
 @dataclass
