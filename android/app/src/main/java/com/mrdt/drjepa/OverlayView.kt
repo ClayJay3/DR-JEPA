@@ -77,8 +77,10 @@ class OverlayView(context: Context, attrs: AttributeSet?) :
         val h = height.toFloat()
 
         if (res != null && r != null) {
-            // focal length of the FILL_CENTER-cropped preview in view px
-            val f = max(h, w * bufferAspect) / 2f /
+            // focal length of the FILL_CENTER-cropped preview in view px:
+            // the buffer's long side (which carries fovLongDeg) aligns with
+            // the screen's long dimension in both orientations
+            val f = max(max(w, h), min(w, h) * bufferAspect) / 2f /
                 tan(Math.toRadians(fovLongDeg / 2.0)).toFloat()
             val cx = w / 2f
             val cy = h / 2f

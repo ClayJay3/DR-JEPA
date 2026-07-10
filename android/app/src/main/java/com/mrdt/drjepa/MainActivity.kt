@@ -2,9 +2,12 @@ package com.mrdt.drjepa
 
 import android.Manifest
 import android.content.Intent
+import android.content.res.Configuration
 import android.hardware.camera2.CameraCharacteristics
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.view.Surface
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
@@ -87,6 +90,7 @@ class MainActivity : AppCompatActivity() {
         mapHud = findViewById(R.id.mapHud)
         status = findViewById(R.id.status)
         sensors = SensorHub(this)
+        sensors.displayRotation = currentRotation()
         sensors.onOrientation = {
             overlay.deviceToWorld = sensors.deviceToWorld
             overlay.postInvalidateOnAnimation()
@@ -216,6 +220,16 @@ class MainActivity : AppCompatActivity() {
         return "%s  |  %d ms  %.1f Hz\nspd %.1f m/s  hdg %03.0f  gps +-%.0f m\n%s"
             .format(b.name, r.stepMs, 1f / lastDt, sensors.speed,
                 r.headingDeg, sensors.accuracy, goal)
+    }
+
+    private fun currentRotation(): Int =
+        if (Build.VERSION.SDK_INT >= 30) display?.rotation ?: Surface.ROTATION_0
+        else @Suppress("DEPRECATION") windowManager.defaultDisplay.rotation
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // sensorLandscape can flip 180 without recreating the activity
+        sensors.displayRotation = currentRotation()
     }
 
     override fun onDestroy() {

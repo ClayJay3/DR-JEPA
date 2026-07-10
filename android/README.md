@@ -51,8 +51,10 @@ SoC recommended — the DINOv2 forward dominates the step time).
 1. Copy `.drjepa` bundles anywhere on the phone (Downloads is fine).
 2. Launch, grant camera + location, tap **Load model**, pick a bundle
    (remembered across restarts).
-3. Wait for a GPS fix, hold the phone upright facing your direction of
-   travel (~1.4 m up, back camera forward).
+3. Wait for a GPS fix, hold the phone in landscape facing your direction
+   of travel (~1.4 m up, back camera forward). The UI is landscape-locked;
+   note the model always sees a square center-crop, so orientation changes
+   the display, not the model's field of view.
 4. Tap the top-down map to set a goal, or **Goal 30m ahead**.
 5. Walk. Follow the steering needle / throttle bar if you want to *be*
    the closed loop; the AR path shows the current A\* route, the map
