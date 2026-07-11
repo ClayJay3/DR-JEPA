@@ -7,7 +7,6 @@ import android.graphics.YuvImage
 import android.media.Image
 import com.google.ar.core.Camera
 import org.json.JSONObject
-import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -19,18 +18,20 @@ import java.util.concurrent.atomic.AtomicInteger
 /**
  * Real-world data collection for sim-to-real fine-tuning.
  *
- * Per captured frame (throttled by ArCam to ~5 Hz) this stores everything
- * the offline pipeline (real2dataset.py) needs to build the same wedge
- * training labels the simulator emits:
+ * Records only RGB + pose + intrinsics; DEPTH IS NOT CAPTURED. On-device
+ * ARCore depth (motion-stereo, no ToF on our phones) is far too noisy on
+ * the ground plane at range -- it labelled flat lawn as ~80% obstacle.
+ * real2dataset.py instead runs a Depth Anything model on these RGB frames
+ * offline, which gives smooth, geometrically consistent depth.
+ *
+ * Per captured frame (throttled by ArCam to ~5 Hz):
  *  - frames/NNNNN.jpg   full CPU camera image, SENSOR orientation (the
  *                       recorded intrinsics match this orientation; the
  *                       converter uprights it)
- *  - depth/NNNNN.pgm    ARCore depth, 16-bit P5 PGM (big-endian per spec),
- *                       millimetres, 0 = no data; same FOV as the frame
  *  - meta.jsonl         one JSON object per frame: timestamp, physical
  *                       camera pose (world, quaternion + translation),
- *                       CPU-image intrinsics, dims, VIO speed, heading
- *                       (NaN until north-aligned)
+ *                       CPU-image intrinsics, VIO speed, heading + local
+ *                       E/N (NaN until north-aligned), upright rotation
  *  - session.json       device / geometry constants, written on close
  *
  * Files go to the app-scoped external dir (no permissions needed):
@@ -49,7 +50,6 @@ class Recorder(
         "rec_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
             .format(Date()))
     private val framesDir = File(dir, "frames").apply { mkdirs() }
-    private val depthDir = File(dir, "depth").apply { mkdirs() }
     private val meta = File(dir, "meta.jsonl").bufferedWriter()
 
     private val worker = Executors.newSingleThreadExecutor()
@@ -65,8 +65,6 @@ class Recorder(
         val w: Int, val h: Int,
         val y: ByteArray, val u: ByteArray, val v: ByteArray,
         val yStride: Int, val uvStride: Int, val uvPixStride: Int,
-        // depth (millimetres)
-        val dw: Int, val dh: Int, val depth: ShortArray,
         // physical camera pose (ARCore world): tx ty tz qx qy qz qw
         val pose: FloatArray,
         // CPU-image intrinsics fx fy cx cy
@@ -83,7 +81,7 @@ class Recorder(
      * thread; both images may be closed as soon as this returns.
      * Returns false if the frame was dropped (writer busy).
      */
-    fun submit(camImage: Image, depthImage: Image, cam: Camera,
+    fun submit(camImage: Image, cam: Camera,
                speed: Float, headingDeg: Float,
                localE: Float, localN: Float, uprightRot: Int): Boolean {
         if (closed || pending.get() >= 2) return false
@@ -95,20 +93,6 @@ class Recorder(
             val b = p.buffer.duplicate(); b.rewind()
             return ByteArray(b.remaining()).also { b.get(it) }
         }
-        val dPlane = depthImage.planes[0]
-        val dBuf = dPlane.buffer.duplicate().order(
-            java.nio.ByteOrder.nativeOrder())
-        dBuf.rewind()
-        val dw = depthImage.width
-        val dh = depthImage.height
-        val rowShorts = dPlane.rowStride / 2
-        val dAll = ShortArray(dBuf.remaining() / 2)
-        dBuf.asShortBuffer().get(dAll)
-        // strip row padding now so the file is dense dw x dh
-        val depth = if (rowShorts == dw) dAll else ShortArray(dw * dh).also {
-            for (r in 0 until dh)
-                System.arraycopy(dAll, r * rowShorts, it, r * dw, dw)
-        }
 
         val p = cam.pose
         val q = p.rotationQuaternion
@@ -118,7 +102,6 @@ class Recorder(
             camImage.width, camImage.height,
             copy(py), copy(pu), copy(pv),
             py.rowStride, pu.rowStride, pu.pixelStride,
-            dw, dh, depth,
             floatArrayOf(p.tx(), p.ty(), p.tz(), q[0], q[1], q[2], q[3]),
             floatArrayOf(intr.focalLength[0], intr.focalLength[1],
                          intr.principalPoint[0], intr.principalPoint[1]),
@@ -145,12 +128,11 @@ class Recorder(
                 put("device", android.os.Build.MODEL)
                 put("cam_height_m", ArCam.CAM_HEIGHT_M)
                 put("cpu_w", g.w); put("cpu_h", g.h)
-                put("depth_w", g.dw); put("depth_h", g.dh)
                 put("fx", g.intr[0]); put("fy", g.intr[1])
                 put("cx", g.intr[2]); put("cy", g.intr[3])
                 put("note", "intrinsics + pose are SENSOR-oriented; " +
                     "pose = ARCore physical camera (x right, y up, " +
-                    "-z look); depth mm along optical axis, 0 = invalid")
+                    "-z look); depth is estimated offline from the RGB")
             }.toString(2))
         }
 
@@ -172,19 +154,6 @@ class Recorder(
         FileOutputStream(File(framesDir, "$name.jpg")).use {
             YuvImage(nv21, ImageFormat.NV21, g.w, g.h, null)
                 .compressToJpeg(Rect(0, 0, g.w, g.h), 90, it)
-        }
-
-        // ---- depth: 16-bit binary PGM (big-endian per spec) ----
-        BufferedOutputStream(
-            FileOutputStream(File(depthDir, "$name.pgm"))).use { s ->
-            s.write("P5\n${g.dw} ${g.dh}\n65535\n".toByteArray())
-            val b = ByteArray(g.depth.size * 2)
-            for (i in g.depth.indices) {
-                val v = g.depth[i].toInt() and 0xFFFF
-                b[2 * i] = (v shr 8).toByte()
-                b[2 * i + 1] = v.toByte()
-            }
-            s.write(b)
         }
 
         // ---- per-frame metadata ----

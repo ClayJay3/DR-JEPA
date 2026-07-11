@@ -1,16 +1,19 @@
 """Phone recordings -> DR-JEPA training episodes.
 
 Converts sessions captured by the Android app's Record mode
-(collect/rec_*/ with frames/, depth/, meta.jsonl, session.json) into the
-exact (mp4, csv, npz) episode triplets that `drjepa.py preprocess`
-consumes, so real-world data mixes with simulator episodes with ZERO
-trainer changes:
+(collect/rec_*/ with frames/, meta.jsonl, session.json) into the exact
+(mp4, csv, npz) episode triplets that `drjepa.py preprocess` consumes, so
+real-world data mixes with simulator episodes with ZERO trainer changes:
 
-  * occ / vis / elev wedge labels are built from ARCore depth unprojected
+  * DEPTH IS ESTIMATED OFFLINE with a Depth Anything model on the recorded
+    RGB -- the app no longer saves ARCore depth, which was motion-stereo
+    with no ToF and far too noisy on the ground plane at range (it labelled
+    flat lawn as ~80% obstacle: grazing-angle depth error faked +-1 m of
+    height, tripping the obstacle threshold everywhere). A monocular metric
+    model yields smooth, geometrically consistent depth instead.
+  * occ / vis / elev wedge labels are then built by unprojecting that depth
     through the recorded camera poses -- the same geometry the simulator's
-    wedge_ground_truth computes analytically. Cells without depth returns
-    are marked invisible, and every loss is visibility-masked, so the
-    short (~8 m) depth range simply supervises fewer cells per frame.
+    wedge_ground_truth computes analytically.
   * sand is all-zero (no real label; lawns/forests genuinely have none --
     revisit for desert sessions), and the tip-hazard channel needs no
     label here because the trainer derives it from the elevation wedge.
@@ -20,11 +23,16 @@ trainer changes:
     goal-context features look like goal-directed driving, and motion
     conditioning uses VIO speed + a yaw-rate steer proxy.
 
-Usage:
+Monocular depth is only APPROXIMATELY metric; --depth_scale applies a
+global multiplier if a systematic offset is measured. Absolute scale
+mostly shifts distances/elevations -- the obstacle test is per-cell
+relative, so smooth depth already fixes the false-obstacle problem.
+
+Usage (needs `pip install transformers` for the depth model):
     python real2dataset.py --sessions collect/rec_* --output data_real
-    python real2dataset.py --selftest        # geometry sanity check
+    python real2dataset.py --selftest        # geometry check, no model
 Then:
-    python drjepa.py preprocess --data data_sim,data_real --out packed
+    python drjepa.py preprocess --data_dir data_sim,data_real --output packed
 """
 
 import argparse
@@ -41,13 +49,52 @@ from drjepa.simulator import M_PER_DEG
 
 WEDGE_CELLS = 48        # keep identical to generate_synth_data.py
 WEDGE_RES = 0.5
-DEPTH_MIN_M = 0.15      # ARCore depth is noise below this
-DEPTH_MAX_M = 8.2       # and absent beyond this
+DEPTH_MIN_M = 0.15      # trust estimated depth in this range
+DEPTH_MAX_M = 20.0      # (a monocular metric model sees much farther than
+#                         the phone's old ~8 m ARCore depth)
 OBST_LO = 0.25          # above-ground band that counts as an obstacle:
 OBST_HI = 2.5           # matches the sim's drive-over rule at the bottom,
 #                         ignores overhanging canopy at the top
 MIN_PTS_VIS = 3         # depth returns before a cell counts as observed
 MIN_PTS_OCC = 4         # in-band returns before a cell counts as occupied
+
+# Depth Anything V2, metric outdoor. Configurable via --depth_model; must
+# be a metric (not relative) checkpoint so the output is in metres.
+DEFAULT_DEPTH_MODEL = "depth-anything/Depth-Anything-V2-Metric-Outdoor-Large-hf"
+
+# upright <-> sensor rotation pairs (cv2 codes), for running the depth
+# model on an upright image then mapping depth back to the sensor frame
+_FWD_ROT = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
+            270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+_INV_ROT = {90: cv2.ROTATE_90_COUNTERCLOCKWISE, 180: cv2.ROTATE_180,
+            270: cv2.ROTATE_90_CLOCKWISE}
+
+
+class DepthEstimator:
+    """Lazy Depth Anything wrapper: BGR image -> metric depth (m), HxW.
+
+    Runs the model on an UPRIGHT image (what it was trained on) and rotates
+    the depth back to the sensor frame so it lines up with the recorded
+    sensor-orientation intrinsics + pose.
+    """
+
+    def __init__(self, model_name=DEFAULT_DEPTH_MODEL, device="cuda"):
+        from transformers import pipeline
+        self.pipe = pipeline("depth-estimation", model=model_name,
+                             device=0 if device == "cuda" else -1)
+
+    def __call__(self, bgr_sensor, rot):
+        from PIL import Image
+        up = cv2.rotate(bgr_sensor, _FWD_ROT[rot]) if rot else bgr_sensor
+        rgb = cv2.cvtColor(up, cv2.COLOR_BGR2RGB)
+        pred = self.pipe(Image.fromarray(rgb))["predicted_depth"]
+        d = pred.squeeze().cpu().numpy().astype(np.float32)
+        d = cv2.resize(d, (up.shape[1], up.shape[0]))     # back to input res
+        if rot:
+            d = cv2.rotate(d, _INV_ROT[rot])              # -> sensor frame
+
+        cv2.imwrite("depth.png", (np.clip(d, 0.0, 8.0) / 8.0 * 255).astype(np.uint8))
+        return d
 
 
 def quat_to_mat(qx, qy, qz, qw):
@@ -61,15 +108,16 @@ def quat_to_mat(qx, qy, qz, qw):
          1 - 2 * (qx * qx + qy * qy)]])
 
 
-def unproject(depth_m, fx, fy, cx, cy):
+def unproject(depth_m, fx, fy, cx, cy, dmin=DEPTH_MIN_M, dmax=DEPTH_MAX_M):
     """Depth image -> camera-frame points (ARCore: x right, y up, -z look).
 
     Depth is distance along the optical axis; image v grows downward.
+    NaN/inf (invalid returns) fail the finite-range test and drop out.
     Returns (N, 3) for valid pixels plus the validity mask.
     """
     dh, dw = depth_m.shape
     v, u = np.mgrid[0:dh, 0:dw].astype(np.float32)
-    ok = (depth_m > DEPTH_MIN_M) & (depth_m < DEPTH_MAX_M)
+    ok = (depth_m > dmin) & (depth_m < dmax)
     d = depth_m[ok]
     x = (u[ok] + 0.5 - cx) / fx * d
     y = -(v[ok] + 0.5 - cy) / fy * d
@@ -78,7 +126,8 @@ def unproject(depth_m, fx, fy, cx, cy):
 
 
 def wedge_from_depth(depth_m, fx, fy, cx, cy, pose7, cam_height,
-                     cells=WEDGE_CELLS, res=WEDGE_RES):
+                     cells=WEDGE_CELLS, res=WEDGE_RES,
+                     dmin=DEPTH_MIN_M, dmax=DEPTH_MAX_M):
     """One frame's depth -> (occ bool, vis bool, elev f32) wedge labels.
 
     The wedge matches wedge_ground_truth's frame: [i, j] covers
@@ -86,9 +135,10 @@ def wedge_from_depth(depth_m, fx, fy, cx, cy, pose7, cam_height,
     elevation is relative to the ground under the rover (camera minus
     cam_height). Cell ground = 20th-percentile point height (robust to
     obstacle points above it); occupied = enough returns in the
-    [OBST_LO, OBST_HI] band above that ground.
+    [OBST_LO, OBST_HI] band above that ground. dmin/dmax bound the trusted
+    depth range (a phone tops out ~8 m; a ZED sees much farther).
     """
-    pts_cam, _ = unproject(depth_m, fx, fy, cx, cy)
+    pts_cam, _ = unproject(depth_m, fx, fy, cx, cy, dmin, dmax)
     occ = np.zeros((cells, cells), bool)
     vis = np.zeros((cells, cells), bool)
     elev = np.zeros((cells, cells), np.float32)
@@ -143,15 +193,14 @@ def wedge_from_depth(depth_m, fx, fy, cx, cy, pose7, cam_height,
     return occ, vis, elev
 
 
-def convert_session(sess_dir, out_dir, img_size, cam_height_default=1.4):
+def convert_session(sess_dir, out_dir, img_size, estimator,
+                    cam_height_default=1.4, depth_scale=1.0):
     """One rec_* session -> one (mp4, csv, npz) episode in out_dir."""
     import pandas as pd
 
     with open(os.path.join(sess_dir, "session.json")) as f:
         sess = json.load(f)
     cam_height = float(sess.get("cam_height_m", cam_height_default))
-    sx = sess["depth_w"] / sess["cpu_w"]
-    sy = sess["depth_h"] / sess["cpu_h"]
 
     metas = []
     with open(os.path.join(sess_dir, "meta.jsonl")) as f:
@@ -187,28 +236,24 @@ def convert_session(sess_dir, out_dir, img_size, cam_height_default=1.4):
     for m in metas:
         name = "%05d" % m["i"]
         img = cv2.imread(os.path.join(sess_dir, "frames", name + ".jpg"))
-        depth = cv2.imread(os.path.join(sess_dir, "depth", name + ".pgm"),
-                           cv2.IMREAD_UNCHANGED)
-        if img is None or depth is None:
+        if img is None:
             continue
-        # DEPTH16 keeps range in the low 13 bits; mm -> m
-        depth_m = (depth.astype(np.uint16) & 0x1FFF).astype(np.float32) / 1e3
+        rot = int(m.get("rot", 0))
 
+        # estimate depth from the RGB (sensor frame, matching the recorded
+        # sensor intrinsics + pose); scale corrects any systematic offset
+        depth_m = estimator(img, rot) * depth_scale
         occ, vis, elev = wedge_from_depth(
-            depth_m, sess["fx"] * sx, sess["fy"] * sy,
-            sess["cx"] * sx, sess["cy"] * sy,
-            m["pose"], cam_height)
+            depth_m, sess["fx"], sess["fy"], sess["cx"], sess["cy"],
+            m["pose"], cam_height, dmin=DEPTH_MIN_M, dmax=DEPTH_MAX_M)
         occ_bits.append(np.packbits(occ))
         vis_bits.append(np.packbits(vis))
         elev_q.append(np.clip(elev / 3.5 * 127, -127, 127).astype(np.int8))
         sand_q.append(np.zeros((WEDGE_CELLS, WEDGE_CELLS), np.uint8))
 
         # upright + square-crop + resize, matching the on-device pilot feed
-        rot = m.get("rot", 90)
         if rot:
-            img = cv2.rotate(img, {90: cv2.ROTATE_90_CLOCKWISE,
-                                   180: cv2.ROTATE_180,
-                                   270: cv2.ROTATE_90_COUNTERCLOCKWISE}[rot])
+            img = cv2.rotate(img, _FWD_ROT[rot])
         hgt, wid = img.shape[:2]
         crop = min(hgt, wid)
         y0, x0 = (hgt - crop) // 2, (wid - crop) // 2
@@ -285,7 +330,8 @@ def selftest():
     depth[~np.isfinite(depth)] = 0.0
 
     pose = [0.0, cam_h, 0.0, 0.0, 0.0, 0.0, 1.0]   # identity: look -z
-    occ, vis, elev = wedge_from_depth(depth, fx, fy, cx, cy, pose, cam_h)
+    occ, vis, elev = wedge_from_depth(depth, fx, fy, cx, cy, pose, cam_h,
+                                      dmax=8.2)
 
     half = WEDGE_CELLS // 2
     # ground ahead: visible, flat. (With a LEVEL camera this synthetic
@@ -306,10 +352,20 @@ def selftest():
 
 def main():
     """CLI entry: convert sessions or run the geometry self-test."""
-    ap = argparse.ArgumentParser(description=__doc__)
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sessions", nargs="+", default=[],
                     help="rec_* session dirs (globs ok)")
     ap.add_argument("--output", default="data_real")
+    ap.add_argument("--cam_height", type=float, default=1.4,
+                    help="fallback camera height (m) if a session omits it")
+    ap.add_argument("--depth_model", default=DEFAULT_DEPTH_MODEL,
+                    help="HF depth-estimation model (must be METRIC)")
+    ap.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
+    ap.add_argument("--depth_scale", type=float, default=1.0,
+                    help="global multiplier on estimated depth to correct a "
+                         "systematic metric offset")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
@@ -321,10 +377,13 @@ def main():
     dirs = [d for d in dirs if os.path.isdir(d)]
     if not dirs:
         raise SystemExit("no session dirs matched --sessions")
+    print(f"loading depth model {args.depth_model} ...")
+    estimator = DepthEstimator(args.depth_model, args.device)
     img_size = Config().model.img_size
     total = 0
     for d in dirs:
-        total += convert_session(d, args.output, img_size)
+        total += convert_session(d, args.output, img_size, estimator,
+                                 args.cam_height, args.depth_scale)
     print(f"wrote {total} frames from {len(dirs)} sessions -> {args.output}")
 
 

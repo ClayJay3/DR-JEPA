@@ -123,11 +123,6 @@ class MainActivity : AppCompatActivity() {
                     "saved ${running.frames} frames\n${running.dir}",
                     Toast.LENGTH_LONG).show()
             } else {
-                if (!arCam.depthSupported) {
-                    Toast.makeText(this, "ARCore depth not supported " +
-                        "on this device", Toast.LENGTH_LONG).show()
-                    return@setOnClickListener
-                }
                 arCam.recorder = Recorder(this) { n ->
                     runOnUiThread { btnRecord.text = "STOP ($n)" }
                 }
