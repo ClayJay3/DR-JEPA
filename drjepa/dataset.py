@@ -194,18 +194,15 @@ def preprocess(data_dir, out_dir, cfg: Config = None, batch_size=160,
 class SeqDataset(Dataset):
     """Sliding windows of precomputed features for RoverJEPA training."""
 
-    def __init__(self, data_dir, cfg: Config, is_val=False, domain=None):
+    def __init__(self, data_dir, cfg: Config, is_val=False):
         """Index sliding windows over a packed dataset.
 
         Windows never straddle episode boundaries, the train/val split is
         by whole episodes (seeded, deterministic -- no leakage), and DAgger
-        episodes get a reduced sampling weight.
-
-        `domain` restricts to one source when set: "sim" or "real". Used to
-        build a real-only validation set so sim-to-real transfer can be
-        watched separately from the sim val loss that selects checkpoints.
+        episodes get a reduced sampling weight. Sim and real episodes are
+        split independently so both appear in one combined train set and one
+        combined val set (the model is optimized and validated on both).
         """
-        assert domain in (None, "sim", "real")
         self.cfg = cfg
         mc = cfg.model
         self.S = mc.seq_len
@@ -242,39 +239,34 @@ class SeqDataset(Dataset):
                 return not os.path.exists(
                     os.path.join(self.data_dir, "gt", f"ep{int(e)}.npz"))
 
-        # deterministic episode-level split (no leakage), stratified by
-        # domain so both sim and real are represented in train AND val --
-        # real val is how sim-to-real transfer is measured. Sim and real are
-        # permuted with the same seeded rng but sim FIRST, so a sim-only
-        # dataset reproduces the original split byte-for-byte.
+        # deterministic episode-level split (no leakage). Sim and real are
+        # split SEPARATELY (each by val_split) then merged into one train
+        # set and one val set, so real is guaranteed present in both without
+        # a rare draw stranding all of it on one side. Sim is permuted FIRST
+        # with the shared seeded rng, so a sim-only dataset reproduces the
+        # original split byte-for-byte.
         eps = np.unique(ep_ids)
         real_eps = np.array([e for e in eps if ep_is_real(e)], eps.dtype)
         sim_eps = np.array([e for e in eps if not ep_is_real(e)], eps.dtype)
         rng = np.random.default_rng(42)
         sim_perm = rng.permutation(sim_eps)
-        n_val_sim = max(1, int(len(sim_perm) * cfg.train.val_split))
-        sim_val = set(sim_perm[-n_val_sim:].tolist())
-        sim_train = set(sim_perm[:-n_val_sim].tolist())
+        n_val_sim = max(1, int(len(sim_perm) * cfg.train.val_split)) \
+            if len(sim_perm) else 0
+        sim_val = set(sim_perm[len(sim_perm) - n_val_sim:].tolist())
+        sim_train = set(sim_perm[:len(sim_perm) - n_val_sim].tolist())
         real_val, real_train = set(), set()
         if len(real_eps):
             real_perm = rng.permutation(real_eps)
-            # at least one real episode in val (transfer needs a real signal);
-            # keep at least one in train too when >= 2 exist
+            # at least one real episode in val; keep >= 1 in train when >= 2
             n_val_real = max(1, round(len(real_perm) * cfg.train.val_split))
             n_val_real = min(n_val_real, max(1, len(real_perm) - 1))
-            real_val = set(real_perm[-n_val_real:].tolist())
-            real_train = set(real_perm[:-n_val_real].tolist()) \
-                if n_val_real < len(real_perm) else set()
+            real_val = set(real_perm[len(real_perm) - n_val_real:].tolist())
+            real_train = set(real_perm[:len(real_perm) - n_val_real].tolist())
 
         if is_val:
-            chosen = (real_val if domain == "real" else
-                      sim_val if domain == "sim" else sim_val | real_val)
+            chosen = sim_val | real_val
         else:
             chosen = sim_train | real_train
-            if domain == "sim":
-                chosen = sim_train
-            elif domain == "real":
-                chosen = real_train
 
         self.starts = []
         kinds = []                 # per window: 0 = sim, 1 = dagger, 2 = real
@@ -315,10 +307,11 @@ class SeqDataset(Dataset):
             w[kinds == 2] = real_w
         self.weights = w
         self.n_real_eps = len(real_eps)
-        self.n_real_val = len(real_val)
 
-        tag = ("val" if is_val else "train") + (f" ({domain})" if domain else "")
+        tag = "val" if is_val else "train"
         msg = f"  {tag}: {len(chosen)} episodes, {len(self.starts)} windows"
+        if is_val and len(real_val):
+            msg += f" (incl. {len(real_val)} real)"
         if not is_val and n_real > 0:
             share = real_w * n_real / (sim_mass + real_w * n_real)
             mode = "auto" if cfg.train.real_weight < 0 else "fixed"

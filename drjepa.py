@@ -52,12 +52,9 @@ def train(args):
     np.random.seed(args.train_seed)
 
     train_ds = SeqDataset(args.dataset, cfg, is_val=False)
-    # checkpoints select on SIM val (stable); real val is watched separately
-    # so sim-to-real transfer is visible without a noisy few-episode set
-    # steering model selection
-    val_ds = SeqDataset(args.dataset, cfg, is_val=True, domain="sim")
-    real_val_ds = (SeqDataset(args.dataset, cfg, is_val=True, domain="real")
-                   if train_ds.n_real_eps > 0 else None)
+    # one combined val set (sim + real): the model is validated and selected
+    # on both together, and the stratified split guarantees real is in it
+    val_ds = SeqDataset(args.dataset, cfg, is_val=True)
     if np.ptp(train_ds.weights) > 0:
         sampler = WeightedRandomSampler(train_ds.weights, len(train_ds))
         shuffle = None
@@ -70,10 +67,6 @@ def train(args):
     val_loader = DataLoader(val_ds, batch_size=tc.batch_size, shuffle=False,
                             num_workers=max(2, tc.num_workers // 2),
                             pin_memory=True)
-    real_val_loader = (DataLoader(real_val_ds, batch_size=tc.batch_size,
-                                  shuffle=False, num_workers=2, pin_memory=True)
-                       if real_val_ds is not None and len(real_val_ds) > 0
-                       else None)
 
     model = RoverJEPA(cfg.model).to(device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -138,31 +131,22 @@ def train(args):
         va = run_val(val_loader)
         # perception quality is what drives navigation: all wedge +
         # completion losses vote; hazard weighs like occupancy scale-wise
-        # -- missing a bank is the one terminal perception failure.
-        # SELECTION IS SIM-ONLY: the real val set (below) is too small to
-        # select on without overfitting to a few scenes; it is a diagnostic.
+        # -- missing a bank is the one terminal perception failure. Scored
+        # over the combined sim+real val set (optimize/generalize both).
         score = va["map"] + 0.5 * va["elev"] + 0.25 * va["sand"] + \
             0.5 * va["comp"] + 0.5 * va["haz"]
-        # sim-to-real transfer readout (real episodes have no completer/sand
-        # labels, so only the wedge losses are meaningful here)
-        rva = run_val(real_val_loader) if real_val_loader is not None else None
 
-        line = (f"ep {epoch + 1:3d}/{tc.epochs} [{time.time() - t0:5.1f}s] "
-                f"train map {tr['map']:.3f} comp {tr['comp']:.3f} | "
-                f"val map {va['map']:.3f} IoU {va['iou']:.3f} "
-                f"elev {va['elev']:.3f} sand {va['sand']:.3f} "
-                f"haz {va['haz']:.3f} "
-                f"comp {va['comp']:.3f} cIoU {va['ciou']:.3f} "
-                f"safe {va['safe']:.3f} | score {score:.4f}"
-                + ("  *best*" if score < best_score else ""))
-        if rva is not None:
-            line += (f"\n         REAL val: map {rva['map']:.3f} "
-                     f"IoU {rva['iou']:.3f} elev {rva['elev']:.3f} "
-                     f"haz {rva['haz']:.3f}  (diagnostic, not in score)")
-        print(line)
+        print(f"ep {epoch + 1:3d}/{tc.epochs} [{time.time() - t0:5.1f}s] "
+              f"train map {tr['map']:.3f} comp {tr['comp']:.3f} | "
+              f"val map {va['map']:.3f} IoU {va['iou']:.3f} "
+              f"elev {va['elev']:.3f} sand {va['sand']:.3f} "
+              f"haz {va['haz']:.3f} "
+              f"comp {va['comp']:.3f} cIoU {va['ciou']:.3f} "
+              f"safe {va['safe']:.3f} | score {score:.4f}"
+              + ("  *best*" if score < best_score else ""))
 
         ckpt = {"model": model.state_dict(), "config": cfg.to_dict(),
-                "epoch": epoch, "val": va, "real_val": rva}
+                "epoch": epoch, "val": va}
         torch.save(ckpt, os.path.join(args.save_dir, "latest.pth"))
         if score < best_score:
             best_score = score
