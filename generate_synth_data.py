@@ -61,7 +61,8 @@ def generate_episode(ep_id):
     """
     args = _ARGS
     seed = args.seed + ep_id
-    sim = RoverSim(SimConfig(), scenario=args.scenario, seed=seed)
+    sim = RoverSim(SimConfig(), scenario=args.scenario, seed=seed,
+                   augment=getattr(args, "augment", False))
     rng = np.random.default_rng(seed + 777)
     expert = ArcPlanner(sim, rng)
     noise = NoiseInjector(rng)
@@ -157,6 +158,11 @@ def main():
     ap.add_argument("--workers", type=int, default=max(1, mp.cpu_count() - 2))
     ap.add_argument("--scenario", default=None,
                     help="force one scenario (open/dense/wall/boulders)")
+    ap.add_argument("--augment", action="store_true",
+                    help="domain-randomize appearance: decorrelate class "
+                         "colours + photometric jitter (hue/saturation/gamma, "
+                         "some grayscale) so the model learns geometry, not "
+                         "colour -- for generalizing across terrains")
     ap.add_argument("--dagger", default=None,
                     help="checkpoint: the model drives, the expert labels")
     ap.add_argument("--expert_mix", type=float, default=0.2,
@@ -171,7 +177,8 @@ def main():
     else:
         ctx = mp.get_context("fork")
     print(f"Generating {args.episodes} episodes -> {args.output} "
-          f"({args.workers} workers{', DAgger' if args.dagger else ''})")
+          f"({args.workers} workers{', DAgger' if args.dagger else ''}"
+          f"{', augment' if args.augment else ''})")
 
     stats = []
     with ctx.Pool(args.workers, initializer=_init_worker, initargs=(args,)) as pool:

@@ -27,6 +27,7 @@ robustness of the visual features.
 """
 
 import math
+import os
 
 import torch
 import torch.nn as nn
@@ -80,9 +81,14 @@ class MapDecoder(nn.Module):
         # before pooling into a scalar "trouble within ~1 s" logit. The
         # trunk already fuses multi-frame parallax + ego-motion, which is
         # everything a 1 s-horizon outcome estimate needs.
+        # two stride-2 convs then adaptive-pool to a fixed 3x3, so the head
+        # is independent of the token-grid resolution (12x12 -> 3x3 is a
+        # no-op pool; 24x24 -> 6x6 -> pooled to 3x3) and old checkpoints
+        # still load unchanged
         self.danger_net = nn.Sequential(
-            nn.Conv2d(256, 128, 3, 2, 1), nn.GELU(),   # 12x12 -> 6x6
-            nn.Conv2d(128, 128, 3, 2, 1), nn.GELU())   # 6x6  -> 3x3
+            nn.Conv2d(256, 128, 3, 2, 1), nn.GELU(),
+            nn.Conv2d(128, 128, 3, 2, 1), nn.GELU(),
+            nn.AdaptiveAvgPool2d((3, 3)))
         self.danger_out = nn.Sequential(
             nn.Linear(128 * 3 * 3 + 64, 128), nn.GELU(), nn.Linear(128, 1))
 
@@ -316,16 +322,35 @@ class RoverJEPA(nn.Module):
 # Frozen backbone wrapper (used by preprocessing and live inference)
 # ==========================================================================
 class Backbone(nn.Module):
-    """Frozen DINOv2 -> (n_tokens, feat_dim) per frame: CLS + pooled patch grid."""
+    """Frozen DINOv2/DINOv3 -> (n_tokens, feat_dim): CLS + pooled patch grid.
+
+    DINOv2 loads from torch.hub (open weights). DINOv3 loads through
+    HuggingFace transformers -- the DINOv3 HF repo ships only the
+    transformers format (safetensors), not the original .pth, and its
+    weights are license-gated: accept the licence on the model page, run
+    `huggingface-cli login` once, and it downloads automatically. The HF
+    id (or a local dir) comes from cfg.backbone_weights.
+    """
 
     IMAGENET_MEAN = (0.485, 0.456, 0.406)
     IMAGENET_STD = (0.229, 0.224, 0.225)
 
     def __init__(self, cfg: ModelConfig, device="cuda"):
-        """Load the pretrained DINOv2 from torch.hub and freeze it."""
+        """Load the frozen pretrained backbone."""
         super().__init__()
         self.cfg = cfg
-        self.net = torch.hub.load("facebookresearch/dinov2", cfg.backbone)
+        self._hf = cfg.backbone.startswith("dinov3")
+        if self._hf:
+            from transformers import AutoModel
+            src = (getattr(cfg, "backbone_weights", "") or
+                   os.environ.get("DINOV3_WEIGHTS", "") or
+                   "facebook/dinov3-vits16-pretrain-lvd1689m")
+            self.net = AutoModel.from_pretrained(src)
+            # skip CLS + register tokens to get the patch grid
+            self.n_prefix = 1 + getattr(self.net.config,
+                                        "num_register_tokens", 0)
+        else:
+            self.net = torch.hub.load("facebookresearch/dinov2", cfg.backbone)
         self.net.eval()
         for p in self.net.parameters():
             p.requires_grad = False
@@ -347,9 +372,16 @@ class Backbone(nn.Module):
         x = (x - self.mean) / self.std
         with torch.autocast("cuda", dtype=torch.float16,
                             enabled=self.device != "cpu"):
-            out = self.net.forward_features(x)
-        cls = out["x_norm_clstoken"]                          # (B, 384)
-        patches = out["x_norm_patchtokens"]                   # (B, G*G, 384)
+            if self._hf:                                      # DINOv3 (HF)
+                h = self.net(pixel_values=x).last_hidden_state
+                cls = h[:, 0]
+                patches = h[:, self.n_prefix:]                # drop registers
+            else:                                             # DINOv2 (hub)
+                out = self.net.forward_features(x)
+                cls = out["x_norm_clstoken"]                  # (B, 384)
+                patches = out["x_norm_patchtokens"]           # (B, G*G, 384)
+        cls = cls.float()
+        patches = patches.float()
         B, N, D = patches.shape
         g = int(N ** 0.5)
         grid = patches.view(B, g, g, D).permute(0, 3, 1, 2)   # (B, D, g, g)

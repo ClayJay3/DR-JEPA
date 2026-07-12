@@ -421,8 +421,12 @@ class SeqDataset(Dataset):
             (s0 * 9973 + (0 if self.is_val else np.random.randint(1 << 30)))
             % (1 << 31))
 
-        tokens = torch.from_numpy(
-            np.ascontiguousarray(self.feats[s0:s0 + W])).float()
+        # keep tokens fp16 (as stored) through the loader and upcast on the
+        # GPU: at 577 tokens an fp32 window is 17.7 MB, so fp32-in-the-worker
+        # put ~36 GB of in-flight batches in RAM (8 workers x prefetch) and
+        # OOM-killed training. np.array() also copies (the memmap slice is
+        # read-only), which silences torch's non-writable-tensor warning.
+        tokens = torch.from_numpy(np.array(self.feats[s0:s0 + W]))   # fp16
         m = self.meta[s0:s0 + W]
 
         label = np.stack([m[:, LTHR], m[:, LSTEER]], axis=1)

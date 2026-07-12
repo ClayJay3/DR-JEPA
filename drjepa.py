@@ -18,6 +18,11 @@ import math
 import os
 import time
 
+# the 24x24 token grid makes decoder activations large and bursty; expandable
+# segments keep the allocator from fragmenting a 16 GB card into an OOM.
+# Must be set before torch initializes CUDA.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import numpy as np
 import torch
 from torch import nn
@@ -102,6 +107,7 @@ def train(args):
         for batch in train_loader:
             batch = {k: v.to(device, non_blocking=True)
                      for k, v in batch.items()}
+            batch["tokens"] = batch["tokens"].float()   # fp16 on the wire
             opt.zero_grad(set_to_none=True)
             with amp:
                 loss, parts = model.compute_losses(batch, tc)
@@ -121,6 +127,7 @@ def train(args):
             with torch.no_grad():
                 for batch in loader:
                     batch = {k: v.to(device) for k, v in batch.items()}
+                    batch["tokens"] = batch["tokens"].float()
                     with amp:
                         _, parts = model.compute_losses(batch, tc)
                     for k, v in parts.items():

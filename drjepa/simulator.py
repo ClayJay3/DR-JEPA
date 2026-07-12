@@ -182,16 +182,43 @@ _SKY_PRESETS = [  # (zenith, horizon) BGR
 ]
 
 
-class EpisodeStyle:
-    """One bag of appearance/dynamics randomization, drawn per episode."""
+def _rand_color(rng):
+    """A wide-gamut BGR colour (for --augment class decorrelation)."""
+    hsv = np.array([[[rng.integers(0, 180), rng.integers(60, 240),
+                      rng.integers(50, 235)]]], np.uint8)
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0, 0].astype(float)
 
-    def __init__(self, rng: np.random.Generator):
+
+class EpisodeStyle:
+    """One bag of appearance/dynamics randomization, drawn per episode.
+
+    With augment=True (the generator's --augment mode) two extra layers are
+    added to push the perception net onto GEOMETRY instead of colour:
+      * class-colour decorrelation -- on half the episodes ground / rock /
+        canopy / trunk are recoloured from one wide gamut, so colour stops
+        predicting class ("grey = rock, green = bush" becomes useless);
+      * global photometric jitter (hue / saturation incl. some fully
+        grayscale episodes / gamma), applied post-render.
+    Both are no-ops when augment=False, and -- because the disabled paths
+    draw ZERO rng values -- non-augmented data is byte-identical to before.
+    """
+
+    def __init__(self, rng: np.random.Generator, augment: bool = False):
         """Sample every appearance/dynamics parameter for one episode."""
         self.ground_a, self.ground_b = [np.array(c, float) for c in
                                         _GROUND_PALETTES[rng.integers(len(_GROUND_PALETTES))]]
         self.rock_color = np.array(_ROCK_PALETTES[rng.integers(len(_ROCK_PALETTES))], float)
         self.canopy_color = np.array(_CANOPY_PALETTES[rng.integers(len(_CANOPY_PALETTES))], float)
         self.trunk_color = np.array((45, 65, 90), float) * rng.uniform(0.8, 1.2)
+
+        # class-colour decorrelation (half of --augment episodes)
+        self.augment = augment
+        if augment and rng.random() < 0.5:
+            self.ground_a = _rand_color(rng)
+            self.ground_b = self.ground_a * rng.uniform(0.75, 1.0)
+            self.rock_color = _rand_color(rng)
+            self.canopy_color = _rand_color(rng)
+            self.trunk_color = _rand_color(rng)
 
         sky_i = rng.integers(len(_SKY_PRESETS))
         self.sky_zenith = np.array(_SKY_PRESETS[sky_i][0], float) * rng.uniform(0.9, 1.1)
@@ -224,6 +251,18 @@ class EpisodeStyle:
         self.vignette = rng.uniform(0.0, 0.35)
         self.motion_blur = rng.uniform(0.10, 0.40)
         self.v_max = rng.uniform(4.0, 8.0)
+
+        # global photometric jitter (applied post-render); neutral no-op off.
+        # saturation mixes fully-grey (~20%), full-colour (~30%, so genuine
+        # colour cues still appear) and partial-desaturation episodes.
+        if augment:
+            self.gamma = rng.uniform(0.7, 1.4)
+            self.hue_shift = rng.uniform(-25, 25)          # cv2 hue units
+            r = rng.random()
+            self.sat_scale = (0.0 if r < 0.2 else
+                              1.0 if r < 0.5 else rng.uniform(0.3, 0.9))
+        else:
+            self.gamma, self.hue_shift, self.sat_scale = 1.0, 0.0, 1.0
 
 
 # ==========================================================================
@@ -754,8 +793,28 @@ class Renderer:
 
         frame *= style.exposure[None, None, :]
         frame *= self._vignette
+        if style.augment:
+            frame = self._photometric_aug(frame)
         frame += self._noise_rng.normal(0, style.noise_sigma, frame.shape)
         return np.clip(frame, 0, 255).astype(np.uint8)
+
+    def _photometric_aug(self, frame):
+        """--augment: gamma + hue/saturation jitter so colour is unreliable.
+
+        Applied globally, so relative contrast (e.g. lighter sand vs ground)
+        survives while absolute colour does not -- and grayscale (sat=0)
+        falls out as a special case.
+        """
+        s = self.style
+        frame = (np.clip(frame / 255.0, 0.0, 1.0) ** s.gamma) * 255.0
+        if s.hue_shift != 0.0 or s.sat_scale != 1.0:
+            hsv = cv2.cvtColor(np.clip(frame, 0, 255).astype(np.uint8),
+                               cv2.COLOR_BGR2HSV).astype(np.float32)
+            hsv[..., 0] = (hsv[..., 0] + s.hue_shift) % 180.0
+            hsv[..., 1] *= s.sat_scale
+            frame = cv2.cvtColor(np.clip(hsv, 0, 255).astype(np.uint8),
+                                 cv2.COLOR_HSV2BGR).astype(np.float32)
+        return frame
 
 
 # ==========================================================================
@@ -856,12 +915,14 @@ class RoverSim:
 
     def __init__(self, cfg: SimConfig = None, scenario: str = None,
                  spawn_mode: str = None, seed: int = None,
-                 origin=(35.0, -120.0)):
+                 origin=(35.0, -120.0), augment: bool = False):
         """Build one fully-randomized episode.
 
         scenario/spawn_mode are drawn from the seeded RNG when omitted, so a
         seed alone reproduces the entire world, style, and noise sequence.
-        `origin` is the lat/lon anchor for the local metric frame.
+        `origin` is the lat/lon anchor for the local metric frame. augment
+        turns on colour-decorrelation + photometric jitter (see EpisodeStyle)
+        for domain-randomized TRAINING data; leave off for eval/deployment.
         """
         self.cfg = cfg or SimConfig()
         self.rng = np.random.default_rng(seed)
@@ -874,7 +935,7 @@ class RoverSim:
             spawn_mode = "uturn" if r < 0.15 else ("recovery" if r < 0.30 else "normal")
         self.spawn_mode = spawn_mode
 
-        self.style = EpisodeStyle(rng)
+        self.style = EpisodeStyle(rng, augment=augment)
         self.terrain = Terrain(rng, self.style)
         self.renderer = Renderer(self.cfg, self.style, self.terrain, rng)
         self.v_max = self.style.v_max
