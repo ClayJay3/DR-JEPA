@@ -34,7 +34,15 @@ class SimConfig:
 
     # Episode logic
     goal_radius: float = 4.0         # success distance (m)
-    max_frames: int = 900            # 90 s cap per episode
+    max_frames: int = 900            # hard backstop per episode (frames)
+    no_progress_s: float = 0.0       # give up after this many seconds without
+    #                                  getting closer to the goal than ever
+    #                                  before. 0 = disabled (data generation
+    #                                  keeps the plain max_frames cap). Eval
+    #                                  uses it so a SLOW-but-closing rover is
+    #                                  not scored the same as a stuck one.
+    progress_eps: float = 0.25       # metres of improvement that count as
+    #                                  progress (ignores GPS/pose jitter)
 
 
 @dataclass

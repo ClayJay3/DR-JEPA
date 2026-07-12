@@ -981,6 +981,12 @@ class RoverSim:
         self.collision_count = 0
         self.tipped = False
         self.terrain_stalls = 0
+        # progress-based give-up: a wall-clock cap punishes a rover that is
+        # slow but still closing on the goal (and rewards one that fails
+        # fast). Track the best distance reached; only give up after
+        # cfg.no_progress_s of NOT beating it.
+        self.best_goal_d = self.goal_dist_true()
+        self.stagnant_frames = 0
 
         # --- sensor biases (OU processes) ---
         self.gps_bias = np.zeros(2)
@@ -1177,10 +1183,21 @@ class RoverSim:
         self.bump_phase += self.v * dt * np.array([1.7, 2.3]) + dt * np.array([2.0, 3.1])
         self._sensor_step()
 
+        # progress tracking: "closer than ever before" resets the clock
+        d = self.goal_dist_true()
+        if d < self.best_goal_d - cfg.progress_eps:
+            self.best_goal_d = d
+            self.stagnant_frames = 0
+        else:
+            self.stagnant_frames += 1
+        no_progress = (cfg.no_progress_s > 0 and
+                       self.stagnant_frames * dt >= cfg.no_progress_s)
+
         return {"collided": self.collided_now,
                 "tipped": self.tipped,
-                "reached": self.goal_dist_true() < cfg.goal_radius,
+                "reached": d < cfg.goal_radius,
                 "timeout": self.frame >= cfg.max_frames,
+                "no_progress": no_progress,
                 "clearance": self.clearance()}
 
     # ------------- rendering -------------

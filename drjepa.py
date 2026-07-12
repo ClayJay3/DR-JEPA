@@ -140,8 +140,17 @@ def train(args):
         # completion losses vote; hazard weighs like occupancy scale-wise
         # -- missing a bank is the one terminal perception failure. Scored
         # over the combined sim+real val set (optimize/generalize both).
+        #
+        # occ IoU is REWARDED because the occupancy BCE cannot see detection:
+        # it is swamped by the ~95% free-space majority, so it barely moves
+        # (0.147 -> 0.143) while actual obstacle detection quadruples (IoU
+        # 0.016 -> 0.065). Without this term a small hazard wobble outvotes
+        # the whole occupancy gain -- measured: the loss-only score picked
+        # ep21 (IoU 0.043) when ep33 (IoU 0.086) was the better ROVER on the
+        # 108-episode eval (contacts 2.55 -> 1.91, SPL 0.806 -> 0.824,
+        # success 91.7 -> 92.6; the +0.9 pt tips was one episode = noise).
         score = va["map"] + 0.5 * va["elev"] + 0.25 * va["sand"] + \
-            0.5 * va["comp"] + 0.5 * va["haz"]
+            0.5 * va["comp"] + 0.5 * va["haz"] - 1.0 * va["iou"]
 
         print(f"ep {epoch + 1:3d}/{tc.epochs} [{time.time() - t0:5.1f}s] "
               f"train map {tr['map']:.3f} comp {tr['comp']:.3f} | "
@@ -196,7 +205,8 @@ def evaluate(args):
     results = []
     for ep in range(args.episodes):
         seed = args.seed + ep
-        sim = RoverSim(SimConfig(max_frames=args.max_frames), seed=seed)
+        sim = RoverSim(SimConfig(max_frames=args.max_frames,
+                                 no_progress_s=args.no_progress_s), seed=seed)
         expert = ArcPlanner(sim, np.random.default_rng(seed))
         if pilot:
             pilot.reset()
@@ -236,6 +246,9 @@ def evaluate(args):
                 break
             if info["reached"]:
                 status = "reached"
+                break
+            if info["no_progress"]:
+                status = "no_progress"      # stopped closing on the goal
                 break
             if info["timeout"]:
                 break
@@ -531,8 +544,14 @@ if __name__ == "__main__":
     p.add_argument("--seed", type=int, default=1000)
     p.add_argument("--record", type=int, default=0, help="record first N episodes")
     p.add_argument("--record_dir", default="eval_out")
-    p.add_argument("--max_frames", type=int, default=900,
-                   help="episode time cap in frames (10 fps)")
+    p.add_argument("--max_frames", type=int, default=3000,
+                   help="hard backstop in frames (10 fps); the real give-up "
+                        "rule is --no_progress_s")
+    p.add_argument("--no_progress_s", type=float, default=60.0,
+                   help="give up after this many seconds without getting "
+                        "closer to the goal than ever before (0 = disable and "
+                        "fall back to the plain --max_frames cap). A slow but "
+                        "still-closing rover should not score as a failure.")
     p.add_argument("--no_vo", action="store_true",
                    help="disable visual-odometry map alignment")
     p.add_argument("--complete", action="store_true",
