@@ -256,16 +256,35 @@ class RoverJEPA(nn.Module):
         loss_conf = F.binary_cross_entropy_with_logits(conf_logit, vis_gt)
         loss_elev = (F.smooth_l1_loss(elev_pred, elev_gt, reduction="none")
                      * w).sum() / w.sum().clamp(min=1.0)
+
+        # ---- real episodes do not supervise hazard or sand ----
+        # Both are ABSENT labels on real data, not measurements:
+        #   hazard is derived from the GRADIENT of the elevation wedge, and
+        #   differentiating a depth-derived elevation field amplifies depth
+        #   noise into phantom cliffs -- measured 14.2% of real cells labelled
+        #   tip-hazard (grade p95 = 1.23!) vs ~0.2% in sim. Trained on that,
+        #   the head fired on flat ground AND missed real banks: val haz rose
+        #   0.102 -> 0.143 while occupancy improved, which vetoed checkpoint
+        #   selection and shipped a pre-convergence model (IoU 0.017).
+        #   sand is written as all-zeros by the converters because we cannot
+        #   measure it -- supervising on that teaches "no sand" on sandy
+        #   desert.
+        # No signal beats 25% noise; sim teaches both channels, and --augment
+        # is what carries them across domains. (occ/vis/elev stay supervised:
+        # occupancy from depth is robust -- measured 3.4% on ZED, matching
+        # sim -- and elevation is a real measurement, noisy but zero-mean.)
+        keep = 1.0 - batch["is_real"].reshape(-1, *([1] * (w.dim() - 1)))
+        w_r = w * keep
+        denom = w_r.sum().clamp(min=1.0)
         loss_sand = (F.binary_cross_entropy_with_logits(
-            sand_logit, sand_gt, reduction="none") * w).sum() / \
-            w.sum().clamp(min=1.0)
+            sand_logit, sand_gt, reduction="none") * w_r).sum() / denom
         # steep cells are rare (~2-4%); pos_weight keeps recall alive.
         # missing a bank tips the rover -- terminal -- while a false alarm
         # only costs a detour
         loss_haz = (F.binary_cross_entropy_with_logits(
             haz_logit, haz_gt, reduction="none",
             pos_weight=torch.tensor(4.0, device=haz_logit.device))
-            * w).sum() / w.sum().clamp(min=1.0)
+            * w_r).sum() / denom
         loss_map = loss_occ + 0.25 * loss_conf
         with torch.no_grad():
             R = cfg.wedge_range_cells

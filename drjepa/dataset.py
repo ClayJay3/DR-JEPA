@@ -288,6 +288,10 @@ class SeqDataset(Dataset):
                 kinds.append(kind)
         self.starts = np.array(self.starts, dtype=np.int64)
         kinds = np.array(kinds, dtype=np.int64)
+        # per-window "is real": the trainer masks the hazard + sand losses on
+        # real episodes, whose labels for those two channels are not
+        # measurements (see compute_losses)
+        self.win_real = (kinds == 2).astype(np.float32)
 
         # per-window sampling weights: dagger down, real up (or fixed) to
         # close the sim/real frame imbalance
@@ -449,6 +453,7 @@ class SeqDataset(Dataset):
             anchor[EP], anchor[TRUE_X], anchor[TRUE_Z], rng)
 
         return {"tokens": tokens,
+                "is_real": torch.tensor(self.win_real[i]),
                 "label": torch.from_numpy(label.astype(np.float32)),
                 "execu": torch.from_numpy(execu.astype(np.float32)),
                 "ctx": torch.from_numpy(ctx.astype(np.float32)),
