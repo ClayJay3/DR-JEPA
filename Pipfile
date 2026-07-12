@@ -12,6 +12,7 @@ numpy = "*"
 tqdm = "*"
 onnx = "*"
 onnxruntime = "*"
+transformers = "*"
 
 [dev-packages]
 

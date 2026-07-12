@@ -8,6 +8,10 @@ data_real/
 data_v11/
 data_v11_wall/
 real_dataset/
+data_sim/
+data_sim_wall/
+data_zed/
+zed_data/
 
 # Generated synthetic files
 data_synthetic_unicycle/

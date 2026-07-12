@@ -40,15 +40,25 @@ class SimConfig:
 @dataclass
 class ModelConfig:
     """RoverJEPA architecture."""
-    img_size: int = 448              # DINOv2 input resolution (must be a
-    #                                  multiple of 14; raise/lower to trade
-    #                                  perception sharpness vs speed; frames
-    #                                  are resized to this before the backbone)
-    backbone: str = "dinov2_vits14"  # frozen; features are precomputed
-    feat_dim: int = 384              # DINOv2 ViT-S embedding width
-    pool_rows: int = 12              # patch-token pooling grid (vertical)
-    pool_cols: int = 12              # patch-token pooling grid (horizontal)
-    n_tokens: int = 145              # pool_rows*pool_cols + CLS
+    img_size: int = 448              # backbone input resolution; must be a
+    #                                  multiple of the patch size (14 for
+    #                                  DINOv2, 16 for DINOv3 -- 448 works for
+    #                                  both). Frames are resized to this.
+    backbone: str = "dinov3_vits16"  # frozen; features are precomputed.
+    #                                  dinov2_* loads from torch.hub (open);
+    #                                  dinov3_* loads via HF transformers.
+    backbone_weights: str = "facebook/dinov3-vits16-pretrain-lvd1689m"
+    #                                  HF model id (or local dir) for DINOv3;
+    #                                  weights are license-gated, so accept
+    #                                  the licence + `huggingface-cli login`
+    #                                  once and it downloads automatically
+    #                                  (or override with DINOV3_WEIGHTS env)
+    feat_dim: int = 384              # ViT-S embedding width (same v2 and v3)
+    pool_rows: int = 24              # patch-token pooling grid (vertical) --
+    pool_cols: int = 24              # 24x24 (was 12) for finer small-object
+    #                                  detail; DINOv3@448 has a 28x28 grid to
+    #                                  pool from, wedge (48) is a clean 2x up
+    n_tokens: int = 577              # pool_rows*pool_cols + CLS
 
     # Metric mapping (the persistent spatial memory)
     wedge_cells: int = 48            # per-frame occupancy wedge (48x48)
@@ -81,7 +91,10 @@ class ModelConfig:
 class TrainConfig:
     """Optimization schedule, dataset split, and loss weights."""
     epochs: int = 60
-    batch_size: int = 128
+    batch_size: int = 64             # halved for the 24x24 token grid: 4x the
+    #                                  tokens = 4x decoder activations, and
+    #                                  128 no longer fits 16 GB VRAM alongside
+    #                                  the desktop (peaks 12.8 GB vs 6.4 here)
     lr: float = 3e-4
     min_lr: float = 1e-5
     warmup_epochs: int = 3

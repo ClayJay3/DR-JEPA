@@ -1,14 +1,165 @@
-python generate_synth_data.py --episodes 400 --output data_v11
-python generate_synth_data.py --episodes 150 --output data_v11_wall --scenario wall --seed 50000
-python drjepa.py preprocess --data_dir data_v11,data_v11_wall --output packed
+##############################################################################
+#                                                                            #
+#   DR-JEPA — example commands                                               #
+#   Copy-paste reference. Run from the repo root with the venv active:       #
+#       source .venv/bin/activate                                            #
+#                                                                            #
+#   Pipeline at a glance:                                                    #
+#       generate sim  ->  preprocess  ->  train  ->  eval / visualize        #
+#       real data (phone or ZED)  ->  mix into preprocess  ->  retrain       #
+#       export .drjepa  ->  run on the phone                                 #
+#                                                                            #
+##############################################################################
+
+
+# ============================================================================
+# 1. GENERATE SIMULATOR DATA
+#    Procedural, domain-randomized episodes: video + telemetry (csv) + the
+#    ground-truth wedge labels. Scenarios: open / dense / wall / boulders
+#    (omit --scenario for a randomized mix).
+# ============================================================================
+
+python generate_synth_data.py --episodes 400 --output data_sim
+python generate_synth_data.py --episodes 150 --output data_sim_wall --scenario wall --seed 50000
+
+#   --augment: domain-randomize APPEARANCE (decorrelate class colours +
+#   hue/saturation/gamma jitter incl. some grayscale) so the model learns
+#   geometry, not colour -> generalizes across desert / grass / rock.
+#   Use it for the training set you intend to deploy:
+python generate_synth_data.py --episodes 400 --output data_sim --augment
+python generate_synth_data.py --episodes 150 --output data_sim_wall --scenario wall --seed 50000 --augment
+
+#   Useful flags:
+#       --workers N     parallel episode generation (default: cores - 2)
+#       --seed S        base RNG seed (offset per episode)
+
+
+# ============================================================================
+# 2. PREPROCESS + TRAIN
+#    preprocess packs (video, csv) episodes through the frozen backbone ONCE
+#    into memmapped features; train then never touches pixels. Checkpoints
+#    are selected on perception loss -> runs/best.pth.
+#
+#    BACKBONE = DINOv3 (dinov3_vits16), pooled to 24x24 tokens for finer
+#    small-object detail. It loads via HF transformers and its weights are
+#    LICENSE-GATED -- one-time setup (no manual file download needed):
+#      1. accept the licence at
+#         huggingface.co/facebook/dinov3-vits16-pretrain-lvd1689m
+#      2. create a read token at huggingface.co/settings/tokens
+#      3. cache it once, then transformers auto-downloads on first run:
+#           hf auth login          # (or: huggingface-cli login) paste token
+#      (optional: pre-download to confirm access ->
+#           hf download facebook/dinov3-vits16-pretrain-lvd1689m)
+#    (To fall back to the open DINOv2 instead: set backbone=dinov2_vits14,
+#     pool_rows=pool_cols=12, n_tokens=145 in config.py.)
+#    NOTE: switching backbone/resolution requires a FULL re-extract (features
+#    are ~4x larger at 24x24) and a retrain from scratch.
+# ============================================================================
+
+hf auth login          # once; then the gated DINOv3 weights auto-download
+python drjepa.py preprocess --data_dir data_sim,data_sim_wall --output packed
 python drjepa.py train --dataset packed --save_dir runs
-python drjepa.py collect_beliefs --checkpoint runs/best.pth --episodes 240 --output belief_data
-python drjepa.py tune_completer --checkpoint runs/best.pth --belief_dir belief_data --out runs/best_tuned.pth
-python drjepa.py eval --policy expert --episodes 40 --record 3
-python drjepa.py eval --policy model --checkpoint runs/best.pth --episodes 40 --record 3
-python drjepa.py eval --policy model --checkpoint runs/best.pth --episodes 40 --complete   # + map-completion (measured: no gain in sim)
-python live_inference_test.py --checkpoint runs/best.pth
+
+#   Variants:
+python drjepa.py train --dataset packed --epochs 60 --train_seed 1    # train-twice, select (variance control)
+python drjepa.py train --dataset packed --real_weight auto            # auto-balance real data (default)
+python drjepa.py train --dataset packed --real_weight 8              # fixed real-episode weight
+python drjepa.py train --dataset packed --real_weight 0              # exclude real (sim-only A/B)
+
+
+# ============================================================================
+# 3. EVALUATE (closed-loop: success / tips / SPL / contacts)
+# ============================================================================
+
+python drjepa.py eval --policy model  --checkpoint runs/best.pth --episodes 36 --seed 1000
+python drjepa.py eval --policy expert --episodes 36                            # privileged reference
+python drjepa.py eval --policy model  --checkpoint runs/best.pth --episodes 36 --record 3        # save HUD videos
+python drjepa.py eval --policy model  --checkpoint runs/best.pth --episodes 36 --max_frames 1800 # 180 s cap (fewer timeouts)
+python drjepa.py eval --policy model  --checkpoint runs/best.pth --episodes 36 --complete        # + map-JEPA (measured: no sim gain)
+
+#   3-block protocol (tuning blocks 1000 & 3000, held-out 7000):
+python drjepa.py eval --policy model --checkpoint runs/best.pth --episodes 36 --seed 1000 --record_dir eval/b1000
+python drjepa.py eval --policy model --checkpoint runs/best.pth --episodes 36 --seed 3000 --record_dir eval/b3000
+python drjepa.py eval --policy model --checkpoint runs/best.pth --episodes 36 --seed 7000 --record_dir eval/b7000
+
+
+# ============================================================================
+# 4. VISUALIZE / TEST DRIVE
+#    live_inference_test = the pilot loop with the 2D top-down belief map.
+#    fsd_viz            = "full self-driving" style chase-cam demo video.
+# ============================================================================
+
+python live_inference_test.py --checkpoint runs/best.pth                       # interactive window
 python live_inference_test.py --checkpoint runs/best.pth --headless --frames 3000
+
 python fsd_viz.py --checkpoint runs/best.pth --frames 900 --output_video fsd_demo.mp4
-python fsd_viz.py --checkpoint runs/best.pth --scenario wall --seed 1029 --frames 500 --output_video fsd_wall.mp4 --show
+python fsd_viz.py --checkpoint runs/best.pth --scenario wall --seed 1029 --frames 500 --show
 python fsd_viz.py --checkpoint runs/best.pth --width 960 --height 540 --tweens 1 --show   # fast preview
+
+
+# ============================================================================
+# 5. MAP COMPLETION (map-space JEPA)
+#    Collect belief snapshots, then calibrate the completer's per-channel
+#    temperature on them -> a tuned checkpoint used for the violet ghost layer.
+# ============================================================================
+
+python drjepa.py collect_beliefs --checkpoint runs/best.pth --episodes 240 --output belief_data
+python drjepa.py tune_completer  --checkpoint runs/best.pth --belief_dir belief_data --out runs/best_tuned.pth
+
+
+# ============================================================================
+# 6. EXPORT TO THE PHONE (.drjepa bundle for the Android rig)
+# ============================================================================
+
+python export_android.py --checkpoint runs/best.pth --verify                              # fp32, 448 px
+python export_android.py --checkpoint runs/best.pth --img-size 280 --quantize \
+    --out runs/best_280q.drjepa --verify                                                  # ~2.5x faster on-device
+
+
+# ============================================================================
+# 7. REAL-WORLD DATA — PHONE (Record mode -> Depth Anything, offline)
+#    The app records RGB + pose only; depth is estimated offline here.
+#    Needs: pip install transformers   (depth model downloads on first run)
+# ============================================================================
+
+adb pull /sdcard/Android/data/com.mrdt.drjepa/files/collect
+python real2dataset.py --selftest                                              # geometry check, no model
+python real2dataset.py --sessions collect/rec_* --output data_real
+python real2dataset.py --sessions collect/rec_* --output data_real --depth_scale 1.1   # correct a metric offset
+
+#   NOTE: phone (monocular) depth is best for quick iteration; for
+#         rover-range labels the ZED (section 8) is the primary source.
+
+
+# ============================================================================
+# 8. REAL-WORLD DATA — ZED 2i SVO (primary source, via Docker)
+#    zed_docker.sh carries the ZED SDK + pyzed + CUDA in a container and
+#    passes all args through to zed2dataset.py. Host paths work verbatim.
+#    Needs: Docker + the NVIDIA container toolkit (builds the image once).
+# ============================================================================
+
+./zed_docker.sh --selftest                                                     # geometry check
+./zed_docker.sh --svo ~/svos/*.svo   --output data_zed --cam_height 0.6        # NEURAL depth (default)
+./zed_docker.sh --svo ~/svos/run1.svo --output data_zed --depth_mode ULTRA --hz 3   # faster, no AI model
+
+#   --cam_height  ZED height above the driving ground (m) — set to your mount
+#   --depth_mode  NEURAL (best) / ULTRA / QUALITY / PERFORMANCE
+#   --hz          target sampling rate (SVO is subsampled to this)
+
+#   If the ZED SDK is installed natively instead of using Docker:
+python zed2dataset.py --svo ~/svos/*.svo --output data_zed --cam_height 0.6
+
+
+# ============================================================================
+# 9. FULL SIM + REAL FINE-TUNE (end to end)
+#    Mix simulator and real episodes; auto-balancing upweights the scarce
+#    real data. NEVER train real-only (it collapses to "all obstacle").
+# ============================================================================
+
+python generate_synth_data.py --episodes 400 --output data_sim --augment
+python generate_synth_data.py --episodes 150 --output data_sim_wall --scenario wall --seed 50000 --augment
+./zed_docker.sh --svo ~/svos/*.svo --output data_zed --cam_height 0.6
+python drjepa.py preprocess --data_dir data_sim,data_sim_wall,data_zed --output packed
+python drjepa.py train --dataset packed --save_dir runs                        # --real_weight auto (default)
+python drjepa.py eval  --policy model --checkpoint runs/best.pth --episodes 36 --seed 7000
+python export_android.py --checkpoint runs/best.pth --verify

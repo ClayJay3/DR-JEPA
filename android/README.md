@@ -88,47 +88,56 @@ The sim-trained decoder misses real-world obstacle classes it never saw
 (trees, foliage); **Record** turns the phone into a labeling rig that
 fixes exactly that. Tap **Record** and just walk around (no model, GPS,
 or north alignment needed — VIO tracking is enough); tap again to stop.
-At ~5 Hz the app stores the full camera frame, ARCore's metric depth
-image, and the physical camera pose + intrinsics under
-`Android/data/com.mrdt.drjepa/files/collect/rec_*/`.
+At ~5 Hz the app stores the camera frame plus the physical camera pose +
+intrinsics under `Android/data/com.mrdt.drjepa/files/collect/rec_*/`.
+
+**No depth is captured on-device.** ARCore depth (motion-stereo, no ToF
+on our phones) is far too noisy on the ground plane at range — it labelled
+a flat lawn as ~80% obstacle, because grazing-angle depth error faked
+±1 m of height. Depth is instead estimated **offline** by a Depth Anything
+model on the recorded RGB, which produces smooth, geometrically consistent
+depth. (For rover-range obstacle labels a phone can't beat a real stereo
+sensor — the ZED 2i path (`zed2dataset.py`) is the primary source, run
+via `./zed_docker.sh --svo ~/svos/*.svo --output data_zed` which carries
+the ZED SDK in a container; the phone path is for quick, sensor-free
+iteration.)
 
 Point the camera the way the rover would see the world (~1.4 m up,
-slightly down), walk *past and around* obstacles so depth sees them from
-several sides, and prefer varied scenes — depth reaches ~8 m, so close
-in on the things you want labeled.
+slightly down) and prefer varied scenes with plenty of open drivable
+ground, not just obstacle-dense edges.
 
-Back on the workstation:
+Back on the workstation (needs `pip install transformers` for the depth
+model; it downloads on first run):
 
 ```bash
 adb pull /sdcard/Android/data/com.mrdt.drjepa/files/collect
 python real2dataset.py --sessions collect/rec_* --output data_real
-python real2dataset.py --selftest        # geometry sanity check
-python drjepa.py preprocess --data data_v11,data_v11_wall,data_real --out packed
+python real2dataset.py --selftest        # geometry check (no model needed)
+python drjepa.py preprocess --data_dir data_sim,data_sim_wall,data_real --output packed
 python drjepa.py train --dataset packed  # --real_weight auto is the default
 ```
 
-`real2dataset.py` unprojects each depth image through its recorded pose
-and builds the same occupancy / visibility / elevation wedge labels the
-simulator emits analytically (tip-hazard derives from elevation in the
-trainer; sand has no real label and stays zero). Cells without depth
-returns are marked invisible and every loss is visibility-masked, so
-the short depth range just supervises fewer cells. The resulting
-episodes mix with simulator data in `preprocess`/`train` with **zero
-trainer changes** — real episodes simply contribute nothing to the map
-completer, which needs ground-truth grids only the sim has.
+`real2dataset.py` runs Depth Anything on each RGB frame and unprojects
+that depth through the recorded pose to build the same occupancy /
+visibility / elevation wedge labels the simulator emits analytically
+(tip-hazard derives from elevation in the trainer; sand has no real label
+and stays zero). Monocular depth is only approximately metric — pass
+`--depth_scale` to correct a systematic offset — but the obstacle test is
+per-cell relative, so smooth depth already fixes the false-obstacle
+problem. Episodes mix with simulator data in `preprocess`/`train` with
+**zero trainer changes** — real episodes simply contribute nothing to the
+map completer, which needs ground-truth grids only the sim has.
 
 **Balancing sim vs real.** Real frames are hugely outnumbered by sim, so
 `train` reweights them. `--real_weight auto` (default) lifts real to a
 capped share of the sampled signal; pass a float to override, or `0` to
 exclude real for an A/B. Episodes are tagged real at pack time by the
 absence of ground-truth grids (naming-independent — renamed captures
-still classify correctly). The split is stratified: some real episodes
-go to a **separate real validation set**, printed each epoch as a
-`REAL val` line (map loss + occupancy IoU + hazard) so you can watch
-sim-to-real transfer directly. Checkpoint selection stays on the sim val
-score — a handful of real episodes is too noisy to select on — so the
-`REAL val` numbers are a diagnostic, not the objective, until you have
-enough real data (≥10 episodes, a few held out) to select on them.
+still classify correctly). The split is stratified so real appears in both
+train and one **combined validation set** (sim + real), which the
+checkpoint score is computed over — you optimize and validate on both
+together. **Never train real-only:** from-scratch on a few obstacle-heavy
+episodes collapses to "everything is an obstacle"; always mix sim.
 
 ## Deliberate deviations from the sim pilot
 
