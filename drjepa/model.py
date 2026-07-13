@@ -66,9 +66,14 @@ class MapDecoder(nn.Module):
         self.rows, self.cols = cfg.pool_rows, cfg.pool_cols
         self.cells = cfg.wedge_cells
         self.n_frames = len(cfg.frame_offsets)
+        self.cam_dim = cfg.cam_dim
         assert self.cells % self.rows == 0, "wedge must be a multiple of grid"
         n_up = int(math.log2(self.cells // self.rows))
-        self.cls_proj = nn.Linear(cfg.feat_dim + 2 * self.n_frames, 64)
+        # the camera descriptor rides in alongside ego-motion, and `c` is
+        # broadcast to every token in token_proj below -- so every spatial
+        # position is told which optics produced it
+        self.cls_proj = nn.Linear(
+            cfg.feat_dim + 2 * self.n_frames + cfg.cam_dim, 64)
         self.token_proj = nn.Linear(cfg.feat_dim * self.n_frames + 64, 256)
         ch = [256, 128, 64, 32]
         layers = [nn.Conv2d(256, 256, 3, 1, 1), nn.GELU()]
@@ -92,20 +97,28 @@ class MapDecoder(nn.Module):
         self.danger_out = nn.Sequential(
             nn.Linear(128 * 3 * 3 + 64, 128), nn.GELU(), nn.Linear(128, 1))
 
-    def forward(self, tokens, motion):
+    def forward(self, tokens, motion, cam):
         """tokens (..., F, n_tokens, feat_dim) stacked [current, -2, -4, ...];
-        motion (..., F*2) = (speed, steer) per stacked frame.
+        motion (..., F*2) = (speed, steer) per stacked frame;
+        cam (..., cam_dim) = the camera descriptor for the CURRENT frame
+        (config.camera_features: f_norm, height, pitch, and f_norm*height).
         Returns (occ, conf, elev, sand, haz, danger): the first five
         (..., C, C) indexed [i = x_right, j = z_forward] (rover frame),
         danger a (...,) scalar logit for "trouble within ~1 s".
-        occ/conf/sand/haz/danger are logits; elev is metres."""
+        occ/conf/sand/haz/danger are logits; elev is metres.
+
+        `cam` is not optional. Without it the decoder can only memorize one
+        image-row -> range table: measured on the fixed-camera v12, held-out
+        elevation correlation was 0.91 in sim and 0.04 on the ZED (a 0.6 m
+        rig vs the sim's 1.1 m), with a systematic -1.16 m bias at 15 m."""
         lead = tokens.shape[:-3]
         F_, nt, fd = tokens.shape[-3:]
         t = tokens.reshape(-1, F_, nt, fd)
         m = motion.reshape(-1, motion.shape[-1])
+        k = cam.reshape(-1, cam.shape[-1])
         cls = t[:, 0, 0]                                   # current-frame CLS
         grid = t[:, :, 1:].permute(0, 2, 1, 3).reshape(-1, nt - 1, F_ * fd)
-        c = self.cls_proj(torch.cat([cls, m], dim=-1))
+        c = self.cls_proj(torch.cat([cls, m, k], dim=-1))
         x = self.token_proj(torch.cat([grid, c[:, None].expand(-1, nt - 1, -1)],
                                       dim=-1))
         x = x.view(-1, self.rows, self.cols, 256).permute(0, 3, 1, 2)
@@ -199,6 +212,7 @@ class RoverJEPA(nn.Module):
         G = comp_cells) -- the dataset may carry extra keys (expert action
         labels etc.) which are simply ignored here:
           tokens    (B, W, n_tokens, feat_dim)  frozen backbone features
+          cam       (B, W, cam_dim)  which camera each frame came from
           danger    (B, W, 1)   "trouble within ~1 s" in [0, 1]
           occ/vis   (B, W, C, C)  wedge occupancy / visibility targets
           elev      (B, W, C, C)  wedge elevation targets (metres)
@@ -224,8 +238,11 @@ class RoverJEPA(nn.Module):
             [tokens[:, m_off - o:W - o:2] for o in offs], dim=2)
         mot_stack = torch.cat(
             [motion[:, m_off - o:W - o:2] for o in offs], dim=-1)
+        # camera of the CURRENT frame of each stack (offset 0), so it lines up
+        # with tok_stack[:, :, 0] and with the occ/vis/elev targets below
+        cam_stack = batch["cam"][:, m_off::2]
         occ_logit, conf_logit, elev_pred, sand_logit, haz_logit, \
-            d_logit = self.map_decoder(tok_stack, mot_stack)
+            d_logit = self.map_decoder(tok_stack, mot_stack, cam_stack)
         occ_gt = occ_gt[:, m_off::2]
         vis_gt = vis_gt[:, m_off::2]
         elev_gt = batch["elev"][:, m_off::2]
@@ -276,14 +293,21 @@ class RoverJEPA(nn.Module):
         keep = 1.0 - batch["is_real"].reshape(-1, *([1] * (w.dim() - 1)))
         w_r = w * keep
         denom = w_r.sum().clamp(min=1.0)
+        # sand is ~1.4% of cells; with NO pos_weight the head collapsed toward
+        # the negative class (fired on 0.02% of cells) and the rover drove
+        # straight through sand pits
         loss_sand = (F.binary_cross_entropy_with_logits(
-            sand_logit, sand_gt, reduction="none") * w_r).sum() / denom
-        # steep cells are rare (~2-4%); pos_weight keeps recall alive.
+            sand_logit, sand_gt, reduction="none",
+            pos_weight=torch.tensor(train_cfg.sand_pos_weight,
+                                    device=sand_logit.device))
+            * w_r).sum() / denom
+        # steep cells are rare (~1%); pos_weight keeps recall alive.
         # missing a bank tips the rover -- terminal -- while a false alarm
         # only costs a detour
         loss_haz = (F.binary_cross_entropy_with_logits(
             haz_logit, haz_gt, reduction="none",
-            pos_weight=torch.tensor(4.0, device=haz_logit.device))
+            pos_weight=torch.tensor(train_cfg.haz_pos_weight,
+                                    device=haz_logit.device))
             * w_r).sum() / denom
         loss_map = loss_occ + 0.25 * loss_conf
         with torch.no_grad():
@@ -293,6 +317,17 @@ class RoverJEPA(nn.Module):
             inter = (pred & gt).sum()
             union = (pred | gt).sum().clamp(min=1)
             occ_iou = float(inter) / float(union)
+            # hazard DETECTION, for checkpoint selection. The haz loss cannot
+            # serve that role: it is pos-weighted BCE, so it RISES as the head
+            # grows more willing to fire on rare positives. Measured on the
+            # camera-conditioned run: val haz climbed 0.094 -> 0.152 while occ
+            # IoU climbed 0.008 -> 0.027, and the loss-based score duly picked
+            # epoch 17 over epoch 29 and then early-stopped on a model that was
+            # still improving. Rank an IoU, not a loss.
+            hz_w = (vis_gt[..., :R] > 0.5) & (keep[..., :R] > 0.5)
+            hp = (haz_logit[..., :R] > 0) & hz_w
+            hg = (haz_gt[..., :R] > 0.5) & hz_w
+            haz_iou = float((hp & hg).sum()) / float((hp | hg).sum().clamp(min=1))
 
         # ---------------- map-space JEPA (hidden-map completion) ----------------
         comp_logit = self.map_completer(batch["comp_in"])     # (B, 3, G, G)
@@ -333,6 +368,7 @@ class RoverJEPA(nn.Module):
             "comp": float(loss_comp.detach()),
             "ciou": comp_iou,
             "iou": occ_iou,
+            "hiou": haz_iou,
         }
 
 

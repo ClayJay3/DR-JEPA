@@ -21,7 +21,7 @@ import cv2
 import numpy as np
 import torch
 
-from .config import Config
+from .config import Config, camera_features, fov_to_fnorm
 from .model import RoverJEPA, Backbone
 from .simulator import latlon_to_meters
 
@@ -51,11 +51,21 @@ class MapPilot:
     #                          above the near-field flat-ground p99 of -1.97)
     GUARD_EVIDENCE = 2.0     # single-frame evidence that blocks the guard
     REPLAN_EVERY = 3         # control steps between A* replans
+    LETHAL_R = 0.9           # A* keeps at least this far (m) from believed
+    #                          obstacles. The rover footprint is 0.75 m, so
+    #                          0.9 leaves only 15 cm of slack per side -- it
+    #                          will thread gaps a human driver would refuse.
+    #                          Raising it makes the planner ROUTE AROUND tight
+    #                          gaps; it never deadlocks, because _replan falls
+    #                          back to the slim HARD_R radius when the map says
+    #                          no route exists at all.
+    HARD_R = 0.5             # truly-impassable fallback radius
     N_ARCS = 17
     ARC_T = 2.4              # seconds of arc rollout
     ARC_DT = 0.3
 
-    def __init__(self, checkpoint, device="cuda", vo=True, complete=False):
+    def __init__(self, checkpoint, device="cuda", vo=True, complete=False,
+                 cam_fnorm=None, cam_height=None):
         """Restore the model and precompute wedge-cell geometry.
 
         vo=False disables the scan-matching pose correction. complete=True
@@ -64,6 +74,13 @@ class MapPilot:
         closed loop (the wall-continuation prior also paints over unseen
         gaps, which is anti-exploratory), so it defaults OFF; the completer
         itself stays trained and drives the ghost visualization either way.
+
+        cam_fnorm / cam_height describe THE CAMERA THIS PILOT IS BOLTED TO
+        (config.camera_features; f_norm = 1/tan(hfov/2) in the model's input
+        frame, height in metres). They are the rig's defaults -- a caller
+        whose sensors dict carries per-frame camera keys overrides them.
+        Get these wrong and every wedge lands at the wrong range: that is
+        precisely how the fixed-camera model failed on the ZED.
         """
         ckpt = torch.load(checkpoint, map_location=device, weights_only=False)
         self.cfg = Config.from_dict(ckpt["config"])
@@ -71,6 +88,13 @@ class MapPilot:
         self.device = device
         self.vo = vo             # visual-odometry map alignment
         self.complete = complete # map-space JEPA in the planner
+        self.lethal_r = self.LETHAL_R   # A* obstacle clearance (m), tunable
+        sc = self.cfg.sim
+        self.cam_fnorm = (fov_to_fnorm(sc.fov_deg) if cam_fnorm is None
+                          else float(cam_fnorm))
+        self.cam_height = (sc.cam_height if cam_height is None
+                           else float(cam_height))
+        self.cam_pitch = 0.0     # per-frame, from the IMU via sensors
         self.model = RoverJEPA(mc).to(device)
         self.model.load_state_dict(ckpt["model"])
         self.model.eval()
@@ -188,8 +212,16 @@ class MapPilot:
             mots.extend(m)
         tok_stack = torch.stack(toks, dim=1)              # (1, F, nt, fd)
         mot_t = torch.tensor([mots], dtype=torch.float32, device=tokens.device)
+        # which camera is producing these pixels: rig defaults, overridden by
+        # whatever the caller's sensors actually report (the sim reports its
+        # randomized optics; a real rover reports its mount + IMU pitch)
+        cam = camera_features(sensors.get("cam_fnorm", self.cam_fnorm),
+                              sensors.get("cam_height", self.cam_height),
+                              sensors.get("cam_pitch", self.cam_pitch))
+        cam_t = torch.as_tensor(cam, dtype=torch.float32,
+                                device=tokens.device)[None]
         occ_logit, conf_logit, elev, sand_logit, haz_logit, d_logit = \
-            self.model.map_decoder(tok_stack, mot_t)
+            self.model.map_decoder(tok_stack, mot_t, cam_t)
         occ_logit = occ_logit[0].float().cpu().numpy()
         cl = np.clip(conf_logit[0].float().cpu().numpy(), -30.0, 30.0)
         conf = 1.0 / (1.0 + np.exp(-cl))
@@ -449,8 +481,11 @@ class MapPilot:
             return
         p2 = prob[:ph * 2, :pw * 2].reshape(ph, 2, pw, 2).max(axis=(1, 3))
         d2 = self._dist_m[:ph * 2, :pw * 2].reshape(ph, 2, pw, 2).min(axis=(1, 3))
-        lethal = d2 < 0.9                       # rover radius + margin
-        cost = 1.0 + 6.0 * p2 + np.where(d2 < 2.0, (2.0 - d2) * 2.0, 0.0)
+        lethal = d2 < self.lethal_r             # rover radius + safety margin
+        # soft inflation reaches beyond the lethal radius, so a WIDE route
+        # beats a merely-legal tight one even when both are passable
+        infl = self.lethal_r + 1.1
+        cost = 1.0 + 6.0 * p2 + np.where(d2 < infl, (infl - d2) * 2.0, 0.0)
 
         # ---- believed terrain: hazard channel (per-wedge grades), sand ----
         EW = self.EW[i0:i1, j0:j1]
@@ -550,7 +585,7 @@ class MapPilot:
             # believed-blocked: relax the OBSTACLE inflation once (maybe the
             # map is wrong about clearance) -- but never believed-fatal
             # slopes: a tip-over is terminal, an obstacle graze is not
-            path = self._astar(cost, (d2 < 0.5) | (h2 > 0.8),
+            path = self._astar(cost, (d2 < self.HARD_R) | (h2 > 0.8),
                                start, goal, (ph, pw))
         if path is None:
             self.path = None

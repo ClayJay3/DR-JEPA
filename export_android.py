@@ -173,10 +173,13 @@ def _verify(bundle, model, backbone, cfg: Config, comp_temp,
         toks = rng.standard_normal((1, F, mc.n_tokens, mc.feat_dim)) \
             .astype(np.float32)
         mot = rng.standard_normal((1, 2 * F)).astype(np.float32)
+        cam = rng.standard_normal((1, mc.cam_dim)).astype(np.float32)
         with torch.no_grad():
             refs = model.map_decoder(torch.from_numpy(toks),
-                                     torch.from_numpy(mot))
-        outs = sess("decoder.onnx").run(None, {"tokens": toks, "motion": mot})
+                                     torch.from_numpy(mot),
+                                     torch.from_numpy(cam))
+        outs = sess("decoder.onnx").run(
+            None, {"tokens": toks, "motion": mot, "camera": cam})
         e_dec = max(float(np.abs(o - r.numpy()).max())
                     for o, r in zip(outs, refs))
 
@@ -259,10 +262,16 @@ def main():
                              op_types_to_quantize=["MatMul"])
 
         print("exporting decoder ...")
+        # `camera` is a real input now: f_norm / height / pitch of the phone
+        # mount (config.camera_features). The app must supply it per frame --
+        # a decoder that cannot see its own optics silently reverts to the
+        # one camera it was trained on.
         _export(model.map_decoder,
                 (torch.zeros(1, F, mc.n_tokens, mc.feat_dim),
-                 torch.zeros(1, 2 * F)),
-                os.path.join(td, "decoder.onnx"), ["tokens", "motion"],
+                 torch.zeros(1, 2 * F),
+                 torch.zeros(1, mc.cam_dim)),
+                os.path.join(td, "decoder.onnx"),
+                ["tokens", "motion", "camera"],
                 ["occ", "conf", "elev", "sand", "haz", "danger"])
 
         print("exporting completer ...")

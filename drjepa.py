@@ -149,14 +149,24 @@ def train(args):
         # ep21 (IoU 0.043) when ep33 (IoU 0.086) was the better ROVER on the
         # 108-episode eval (contacts 2.55 -> 1.91, SPL 0.806 -> 0.824,
         # success 91.7 -> 92.6; the +0.9 pt tips was one episode = noise).
-        score = va["map"] + 0.5 * va["elev"] + 0.25 * va["sand"] + \
-            0.5 * va["comp"] + 0.5 * va["haz"] - 1.0 * va["iou"]
+        # Rank DETECTION, not pos-weighted losses. `haz` and `sand` are BCE
+        # with pos_weight, so they RISE as the heads become willing to fire on
+        # rare positives -- they measure calibration drift, not quality. On the
+        # camera-conditioned run val haz went 0.094 -> 0.152 while occ IoU went
+        # 0.008 -> 0.027, and the old score (which PENALIZED haz) therefore
+        # picked ep17 over ep29 and early-stopped a model that was still
+        # improving. ep29 was decisively the better rover: held-out-real
+        # elevation correlation 0.53 vs 0.31 at 6 m, bias at 15 m -0.22 m vs
+        # -0.75 m. So the two rare-class heads are now scored by their IoU
+        # (rewarded), exactly like occupancy already was.
+        score = va["map"] + 0.5 * va["elev"] + 0.5 * va["comp"] \
+            - 1.0 * va["iou"] - 0.5 * va["hiou"]
 
         print(f"ep {epoch + 1:3d}/{tc.epochs} [{time.time() - t0:5.1f}s] "
               f"train map {tr['map']:.3f} comp {tr['comp']:.3f} | "
               f"val map {va['map']:.3f} IoU {va['iou']:.3f} "
               f"elev {va['elev']:.3f} sand {va['sand']:.3f} "
-              f"haz {va['haz']:.3f} "
+              f"haz {va['haz']:.3f} hIoU {va['hiou']:.3f} "
               f"comp {va['comp']:.3f} cIoU {va['ciou']:.3f} "
               f"safe {va['safe']:.3f} | score {score:.4f}"
               + ("  *best*" if score < best_score else ""))
@@ -199,14 +209,54 @@ def evaluate(args):
                          vo=not args.no_vo, complete=args.complete)
         pilot.use_invite = not getattr(args, "no_invite", False)
         pilot.use_governor = not getattr(args, "no_governor", False)
+        if getattr(args, "clearance", None):
+            pilot.lethal_r = args.clearance
+        # deploy-time calibration: these priors decide how much of each
+        # channel actually reaches the map. They were hand-tuned for DINOv2
+        # and went STALE when the backbone changed -- hazard recall collapsed
+        # to 16% (the rover drives onto slopes the map never flagged).
+        if getattr(args, "haz_prior", None) is not None:
+            pilot.HAZ_PRIOR_LOGIT = args.haz_prior
+        if getattr(args, "sand_prior", None) is not None:
+            pilot.SAND_PRIOR = args.sand_prior
+        # occupancy fusion calibration. The camera-conditioned trunk RANKS
+        # obstacles as well as the fixed-camera one (val occ AUC 0.88-0.98 vs
+        # 0.92-0.99) but commits less readily -- val IoU 0.053 vs 0.084 -- so
+        # at the stock prior less of what it sees reaches the map, and closed
+        # loop contacts rose 1.9 -> 2.9/ep. Lowering the prior raises the
+        # evidence each observation contributes; lowering the threshold makes
+        # the planner treat weaker belief as blocking.
+        if getattr(args, "occ_prior", None) is not None:
+            pilot.PRIOR_LOGIT = args.occ_prior
+        if getattr(args, "occ_thresh", None) is not None:
+            pilot.OCC_THRESH = args.occ_thresh
         print(f"Loaded {args.checkpoint}")
+
+    # Eval camera. By default every episode draws its own rig (the training
+    # distribution). Pinning it answers the question that actually matters
+    # before a field trip: "how does this model drive through MY camera?"
+    # e.g. the ZED 2i rig is --cam_height 0.6 --cam_fov 69.
+    sim_kw = dict(max_frames=args.max_frames, no_progress_s=args.no_progress_s)
+    pinned = [k for k in ("cam_height", "cam_fov", "cam_pitch")
+              if getattr(args, k, None) is not None]
+    if pinned:
+        sim_kw.update(cam_randomize=False)
+        if args.cam_height is not None:
+            sim_kw["cam_height"] = args.cam_height
+        if args.cam_fov is not None:
+            sim_kw["fov_deg"] = args.cam_fov
+        if args.cam_pitch is not None:
+            sim_kw["cam_pitch_deg"] = args.cam_pitch
+        cfg0 = SimConfig(**sim_kw)
+        print(f"camera PINNED: fov {cfg0.fov_deg:.1f} deg  "
+              f"height {cfg0.cam_height:.2f} m  "
+              f"mount pitch {cfg0.cam_pitch_deg:+.1f} deg")
 
     os.makedirs(args.record_dir, exist_ok=True)
     results = []
     for ep in range(args.episodes):
         seed = args.seed + ep
-        sim = RoverSim(SimConfig(max_frames=args.max_frames,
-                                 no_progress_s=args.no_progress_s), seed=seed)
+        sim = RoverSim(SimConfig(**sim_kw), seed=seed)
         expert = ArcPlanner(sim, np.random.default_rng(seed))
         if pilot:
             pilot.reset()
@@ -547,6 +597,31 @@ if __name__ == "__main__":
     p.add_argument("--max_frames", type=int, default=3000,
                    help="hard backstop in frames (10 fps); the real give-up "
                         "rule is --no_progress_s")
+    p.add_argument("--cam_height", type=float, default=None,
+                   help="pin the eval camera height (m). Default: each "
+                        "episode draws its own rig. ZED 2i mount = 0.6")
+    p.add_argument("--cam_fov", type=float, default=None,
+                   help="pin the eval camera horizontal FOV (deg). "
+                        "ZED 2i (square-cropped) = 69")
+    p.add_argument("--cam_pitch", type=float, default=None,
+                   help="pin the eval camera MOUNT pitch (deg, + = nose up)")
+    p.add_argument("--occ_prior", type=float, default=None,
+                   help="override PRIOR_LOGIT (default -3.5). LOWER = more "
+                        "occupancy evidence reaches the map (use when the "
+                        "trunk under-fires)")
+    p.add_argument("--occ_thresh", type=float, default=None,
+                   help="override OCC_THRESH (default 0.6): fused probability "
+                        "the planner treats as blocking")
+    p.add_argument("--haz_prior", type=float, default=None,
+                   help="override HAZ_PRIOR_LOGIT (default -2.2). Lower = "
+                        "more hazard recall. At -2.2 the head catches only "
+                        "16%% of real tip-slopes.")
+    p.add_argument("--sand_prior", type=float, default=None,
+                   help="override SAND_PRIOR (default -2.4; catches 22%% of sand)")
+    p.add_argument("--clearance", type=float, default=None,
+                   help="A* lethal radius (m) from believed obstacles "
+                        "(default 0.9; rover footprint is 0.75, so 0.9 leaves "
+                        "only 15 cm slack). Raise to refuse tight gaps.")
     p.add_argument("--no_progress_s", type=float, default=60.0,
                    help="give up after this many seconds without getting "
                         "closer to the goal than ever before (0 = disable and "

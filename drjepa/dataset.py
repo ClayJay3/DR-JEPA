@@ -20,13 +20,13 @@ import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from .config import Config
+from .config import Config, camera_features
 from .simulator import goal_vector
 
 # meta column indices
 (DIST, SINB, COSB, SPEED, LTHR, LSTEER, ETHR, ESTEER, DANGER, EP,
- TRUE_X, TRUE_Z) = range(12)
-META_COLS = 12
+ TRUE_X, TRUE_Z, CAM_FNORM, CAM_H, CAM_PITCH) = range(15)
+META_COLS = 15
 
 DANGER_LOOKAHEAD = 10  # frames: "danger" = worst traversability soon
 
@@ -59,6 +59,21 @@ def _episode_meta(df, cfg: Config):
     if "true_x" in df.columns:
         m[:, TRUE_X] = df["true_x"].values
         m[:, TRUE_Z] = df["true_z"].values
+
+    # ---- the camera this episode was shot with (a MODEL INPUT) ----
+    # Every converter writes these. A dataset packed before camera
+    # conditioning existed has no such columns, and silently defaulting them
+    # would feed the model a confident lie about its own optics -- exactly
+    # the bug this whole change exists to kill -- so refuse to pack it.
+    missing = {"cam_fnorm", "cam_height", "cam_pitch"} - set(df.columns)
+    if missing:
+        raise SystemExit(
+            f"episode CSV is missing camera columns {sorted(missing)}.\n"
+            "Regenerate it: the model is conditioned on the camera now, and "
+            "guessing the intrinsics is what broke real-world transfer.")
+    m[:, CAM_FNORM] = df["cam_fnorm"].values
+    m[:, CAM_H] = df["cam_height"].values
+    m[:, CAM_PITCH] = df["cam_pitch"].values
 
     trav = df.get("trav_score", pd.Series(np.ones(n))).values.astype(np.float32)
     coll = df.get("collision", pd.Series(np.zeros(n))).values.astype(np.float32)
@@ -440,6 +455,8 @@ class SeqDataset(Dataset):
         danger = m[:, DANGER:DANGER + 1]
         dist = m[:, DIST:DIST + 1]
         motion = np.stack([m[:, SPEED], m[:, ESTEER]], axis=1)
+        # (W, CAM_DIM): which camera each frame came from
+        cam = camera_features(m[:, CAM_FNORM], m[:, CAM_H], m[:, CAM_PITCH])
         occ = np.unpackbits(self.occ[s0:s0 + W], axis=-1)
         occ = occ.reshape(W, C, C).astype(np.float32)
         vis = np.unpackbits(self.vis[s0:s0 + W], axis=-1)
@@ -453,6 +470,7 @@ class SeqDataset(Dataset):
             anchor[EP], anchor[TRUE_X], anchor[TRUE_Z], rng)
 
         return {"tokens": tokens,
+                "cam": torch.from_numpy(cam),
                 "is_real": torch.tensor(self.win_real[i]),
                 "label": torch.from_numpy(label.astype(np.float32)),
                 "execu": torch.from_numpy(execu.astype(np.float32)),

@@ -44,7 +44,7 @@ import os
 import cv2
 import numpy as np
 
-from drjepa.config import Config
+from drjepa.config import Config, fnorm_from_intrinsics
 from drjepa.simulator import M_PER_DEG
 
 WEDGE_CELLS = 48        # keep identical to generate_synth_data.py
@@ -92,8 +92,6 @@ class DepthEstimator:
         d = cv2.resize(d, (up.shape[1], up.shape[0]))     # back to input res
         if rot:
             d = cv2.rotate(d, _INV_ROT[rot])              # -> sensor frame
-
-        cv2.imwrite("depth.png", (np.clip(d, 0.0, 8.0) / 8.0 * 255).astype(np.uint8))
         return d
 
 
@@ -106,6 +104,19 @@ def quat_to_mat(qx, qy, qz, qw):
          2 * (qy * qz - qx * qw)],
         [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw),
          1 - 2 * (qx * qx + qy * qy)]])
+
+
+def look_pitch_deg(pose7):
+    """Camera pitch (deg, + = looking up) from a pose quaternion.
+
+    Matches RoverSim.camera_angles' convention so sim and real frames
+    describe their camera the same way. The look direction is -z in the
+    ARCore/ZED right-handed y-up frame, and the y component of that unit
+    vector is the sine of its elevation above horizontal.
+    """
+    R = quat_to_mat(*pose7[3:])
+    look = R @ np.array([0.0, 0.0, -1.0])
+    return math.degrees(math.asin(float(np.clip(look[1], -1.0, 1.0))))
 
 
 def unproject(depth_m, fx, fy, cx, cy, dmin=DEPTH_MIN_M, dmax=DEPTH_MAX_M):
@@ -260,6 +271,12 @@ def convert_session(sess_dir, out_dir, img_size, estimator,
         writer.write(cv2.resize(img[y0:y0 + crop, x0:x0 + crop],
                                 (img_size, img_size)))
 
+        # the camera the model is conditioned on is the one it actually sees:
+        # this upright square crop resized to img_size, NOT the raw sensor.
+        # A 90/270 upright rotation swaps which sensor axis is horizontal.
+        f_horiz = sess["fy"] if rot in (90, 270) else sess["fx"]
+        cam_fnorm = fnorm_from_intrinsics(f_horiz, crop)
+
         # telemetry row in the VIO planar frame (consistent lat/lon/heading)
         Rm = quat_to_mat(*[m["pose"][k] for k in range(3, 7)])
         lk = Rm @ np.array([0.0, 0.0, -1.0])
@@ -288,6 +305,8 @@ def convert_session(sess_dir, out_dir, img_size, estimator,
             "heading": (math.degrees(b) + 360.0) % 360.0,
             "speed": m["speed"], "altitude": 0.0,
             "trav_score": trav, "collision": 0,
+            "cam_fnorm": cam_fnorm, "cam_height": cam_height,
+            "cam_pitch": look_pitch_deg(m["pose"]),
             "true_x": e_pos, "true_z": n_pos,
             "true_yaw": (math.degrees(b) + 360.0) % 360.0,
         })

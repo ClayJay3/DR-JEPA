@@ -12,6 +12,9 @@ data_sim/
 data_sim_wall/
 data_zed/
 zed_data/
+*.mp4
+*.csv
+*.npz
 
 # Generated synthetic files
 data_synthetic_unicycle/

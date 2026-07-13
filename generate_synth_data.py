@@ -110,6 +110,11 @@ def generate_episode(ep_id):
         if sim.collided_now:
             trav = 0.0
 
+        # which camera this frame came from -- randomized per episode, and a
+        # MODEL INPUT (see config.camera_features). Read before sim.step()
+        # because the pitch tracks the current pose.
+        cam_f, cam_h, cam_p = sim.cam_params()
+
         writer.write(frame)
         rows.append({
             "timestamp_ms": int(sim.frame * sim.cfg.dt * 1000),
@@ -120,6 +125,7 @@ def generate_episode(ep_id):
             "heading": sensors["heading"], "speed": sensors["speed"],
             "altitude": sensors["altitude"],
             "trav_score": trav, "collision": int(sim.collided_now),
+            "cam_fnorm": cam_f, "cam_height": cam_h, "cam_pitch": cam_p,
             # true pose: training supervision only, never a model input
             "true_x": sim.x, "true_z": sim.z, "true_yaw": sim.yaw,
         })

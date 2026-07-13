@@ -40,10 +40,10 @@ import os
 import cv2
 import numpy as np
 
-from drjepa.config import Config
+from drjepa.config import Config, fnorm_from_intrinsics
 from drjepa.simulator import M_PER_DEG
 # reuse the verified geometry from the phone converter
-from real2dataset import (WEDGE_CELLS, WEDGE_RES, quat_to_mat,
+from real2dataset import (WEDGE_CELLS, WEDGE_RES, quat_to_mat, look_pitch_deg,
                           wedge_from_depth)
 
 ZED_DEPTH_MIN_M = 0.3    # ZED 2i minimum trustworthy depth
@@ -103,6 +103,9 @@ def convert_svo(svo_path, out_dir, img_size, cam_height, target_hz=5.0,
         s = min(H, W)
         y0, x0 = (H - s) // 2, (W - s) // 2
         dcrop = dmap[y0:y0 + s, x0:x0 + s]
+        # the model is conditioned on the camera, and the camera it actually
+        # sees is this square crop resized to img_size -- NOT the raw sensor
+        cam_fnorm = fnorm_from_intrinsics(fx, s)
         t = pose.get_translation().get()
         q = pose.get_orientation().get()              # [x, y, z, w]
         pose7 = [float(t[0]), float(t[1]), float(t[2]),
@@ -122,12 +125,15 @@ def convert_svo(svo_path, out_dir, img_size, cam_height, target_hz=5.0,
         os.remove(os.path.join(out_dir, base + ".mp4"))
         return 0
 
-    _write_episode(frames, writer, out_dir, base, half_c)
-    print(f"  {base}: {len(frames)} frames")
+    _write_episode(frames, writer, out_dir, base, half_c,
+                   cam_fnorm, cam_height)
+    print(f"  {base}: {len(frames)} frames  "
+          f"(f_norm {cam_fnorm:.3f}, cam_height {cam_height:.2f} m)")
     return len(frames)
 
 
-def _write_episode(frames, writer, out_dir, base, half_c):
+def _write_episode(frames, writer, out_dir, base, half_c,
+                   cam_fnorm, cam_height):
     """Shared episode writer: mp4 already open, plus csv + wedge npz.
 
     Telemetry mirrors real2dataset.py: a virtual goal a few metres beyond
@@ -187,6 +193,11 @@ def _write_episode(frames, writer, out_dir, base, half_c):
             "heading": (math.degrees(b) + 360.0) % 360.0,
             "speed": speed, "altitude": 0.0,
             "trav_score": trav, "collision": 0,
+            # the camera the model is conditioned on. f_norm/height are fixed
+            # by the rig; pitch is per-frame from the VIO pose, exactly as the
+            # simulator logs its own instantaneous pitch.
+            "cam_fnorm": cam_fnorm, "cam_height": cam_height,
+            "cam_pitch": look_pitch_deg(pose7),
             "true_x": pose7[0], "true_z": -pose7[2],
             "true_yaw": (math.degrees(b) + 360.0) % 360.0,
         })
