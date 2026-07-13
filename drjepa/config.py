@@ -1,6 +1,64 @@
 """Single source of truth for every tunable in the project."""
 
+import math
 from dataclasses import dataclass, field, asdict
+
+import numpy as np
+
+# Number of camera-descriptor features the model is conditioned on.
+CAM_DIM = 5
+
+
+def camera_features(f_norm, cam_h, pitch_deg):
+    """The camera descriptor the perception trunk is conditioned on.
+
+    Scalars or numpy arrays; returns (..., CAM_DIM) float32.
+
+    Without this the network cannot know which camera it is looking through,
+    so it memorizes ONE image-row -> range table and applies it to every
+    camera. Measured on v12: held-out SIM elevation correlation 0.91, held-out
+    REAL (ZED at 0.6 m vs the sim's fixed 1.1 m) correlation 0.04, with a
+    systematic -1.16 m bias at 15 m. That is a wrong camera model, not a weak
+    one -- so the camera is now an INPUT, and the simulator randomizes it.
+
+    The features are the quantities projective geometry actually needs:
+      f_norm  focal length in units of half-image-width -- i.e. 1/tan(fov/2).
+              Defined in the model's 448x448 input frame, AFTER any crop and
+              resize, so sim and real cameras are directly comparable.
+      cam_h   camera height above the ground the rover drives on (m).
+      pitch   instantaneous camera pitch (deg, + = nose up). Sets where the
+              horizon falls, which is what anchors row -> range.
+      f_norm * cam_h  is handed over explicitly because it IS the row->range
+              scale: a ground point at range z images at (v - v_horizon) =
+              f * cam_h / z. Making the network multiply two of its own inputs
+              to recover the one number that matters is a needless ask.
+    """
+    f_norm = np.asarray(f_norm, dtype=np.float32)
+    cam_h = np.asarray(cam_h, dtype=np.float32)
+    p = np.radians(np.asarray(pitch_deg, dtype=np.float32))
+    return np.stack([f_norm,
+                     cam_h / 1.5,
+                     np.sin(p),
+                     np.cos(p),
+                     f_norm * cam_h / 1.5], axis=-1).astype(np.float32)
+
+
+def fov_to_fnorm(fov_deg):
+    """Horizontal FOV (deg) -> f_norm, for a full-frame (uncropped) image."""
+    return 1.0 / math.tan(math.radians(fov_deg) / 2.0)
+
+
+def fnorm_from_intrinsics(f_pix, crop_px):
+    """Real camera -> f_norm in the model's input frame.
+
+    `f_pix` is the horizontal focal length in ORIGINAL sensor pixels (after
+    any upright rotation, so it is the focal along the image's x axis), and
+    `crop_px` the side length of the centered square crop that gets resized
+    to the model's input. Resizing crop_px -> img_size scales the focal by
+    img_size/crop_px, and f_norm divides by img_size/2, so img_size cancels:
+        f_norm = f_pix * (img/crop) / (img/2) = 2 * f_pix / crop_px
+    """
+    return 2.0 * float(f_pix) / float(crop_px)
 
 
 @dataclass
@@ -11,7 +69,22 @@ class SimConfig:
     fov_deg: float = 90.0
     dt: float = 0.1                  # control period (10 Hz)
     cam_height: float = 1.1          # camera height above local terrain (m)
+    cam_pitch_deg: float = 0.0       # MOUNT pitch (+ = nose up); terrain slope
+    #                                  and ride bumps are added on top of this
     rover_radius: float = 0.75       # collision footprint (m)
+
+    # ---- per-episode camera randomization ----
+    # Every episode draws its own camera. Before this, all 550 episodes shared
+    # ONE camera (1.1 m, 90 deg, no mount pitch), so "read the image row" was a
+    # perfect strategy in sim and a catastrophic one on any other camera. With
+    # the camera randomized AND supplied as an input (see camera_features), no
+    # single row->range table works, which forces the trunk to actually use it.
+    # Ranges bracket the real rigs: ZED at 0.6 m, phone at ~1.4 m, plus room to
+    # extrapolate. Set cam_randomize=False to reproduce the old fixed camera.
+    cam_randomize: bool = True
+    cam_height_range: tuple = (0.4, 2.0)     # m above local terrain
+    cam_fov_range: tuple = (60.0, 120.0)     # horizontal FOV (deg)
+    cam_pitch_range: tuple = (-25.0, 5.0)    # mount pitch (deg, + = nose up)
 
     # Vehicle dynamics
     v_max: float = 6.0               # nominal top speed (m/s), randomized per episode
@@ -62,6 +135,10 @@ class ModelConfig:
     #                                  once and it downloads automatically
     #                                  (or override with DINOV3_WEIGHTS env)
     feat_dim: int = 384              # ViT-S embedding width (same v2 and v3)
+    cam_dim: int = CAM_DIM           # camera descriptor width (see
+    #                                  camera_features): the trunk is
+    #                                  CONDITIONED on the camera instead of
+    #                                  assuming the one it was trained on
     pool_rows: int = 24              # patch-token pooling grid (vertical) --
     pool_cols: int = 24              # 24x24 (was 12) for finer small-object
     #                                  detail; DINOv3@448 has a 28x28 grid to
@@ -107,7 +184,11 @@ class TrainConfig:
     min_lr: float = 1e-5
     warmup_epochs: int = 3
     weight_decay: float = 0.05
-    patience: int = 12
+    patience: int = 15         # the camera-conditioned task converges slower
+    #                            than the fixed-camera one did (the trunk has
+    #                            to learn to USE the camera, not memorize one),
+    #                            and the first run was still improving when a
+    #                            12-epoch patience cut it off at ep29
     val_split: float = 0.15          # fraction of episodes held out
     window_stride: int = 6           # frames between training windows
     num_workers: int = 8
@@ -119,9 +200,27 @@ class TrainConfig:
     w_sand: float = 0.5              # soft-ground classification
     w_haz: float = 1.0               # steep-ground classification (tip risk)
     w_complete: float = 1.0          # map-space JEPA (hidden-map prediction)
-    occ_pos_weight: float = 1.5      # mild: the fusion prior handles the
-    #                                  base rate; large values fatten the
-    #                                  false-positive tail that pollutes maps
+    sand_pos_weight: float = 3.0     # sand is ~1.4% of visible cells and had
+    #                                  NO pos_weight at all -- the head learned
+    #                                  to sit deeply negative (AUC 0.87 but it
+    #                                  fired on 0.02% of cells vs 1.4% actual),
+    #                                  so the rover ignored soft ground.
+    haz_pos_weight: float = 4.0      # was hardcoded in model.py; surfaced here
+    occ_pos_weight: float = 4.0      # was 1.5, tuned when every episode shared
+    #                                  ONE camera and "read the image row" was
+    #                                  an exact solution. Conditioned on 550
+    #                                  cameras the trunk still RANKS obstacles
+    #                                  as well (val occ AUC 0.88-0.98) but
+    #                                  commits far less readily: val IoU fell
+    #                                  0.084 -> 0.053 and closed-loop contacts
+    #                                  rose 1.9 -> 2.9/ep. Compensating at
+    #                                  deploy (PRIOR_LOGIT -3.5 -> -5.5) does
+    #                                  fix contacts (4.77 -> 1.77) but amplifies
+    #                                  false positives with the true ones, so
+    #                                  the rover detours round phantoms and SPL
+    #                                  collapses 0.71 -> 0.58. Teach the head to
+    #                                  fire on REAL obstacles instead of
+    #                                  amplifying all of its evidence later.
     dagger_weight: float = 0.5       # sampling weight for DAgger episodes
     real_weight: float = -1.0        # sampling weight for real (phone-
     #                                  captured) episodes; < 0 = auto-balance
@@ -157,8 +256,13 @@ class Config:
         for key, default in (("jepa_offsets", (1, 4, 8)),
                              ("frame_offsets", (0, 2, 4))):
             m[key] = tuple(m.get(key, default))
+        s = dict(d.get("sim", {}))
+        for key, default in (("cam_height_range", (0.4, 2.0)),
+                             ("cam_fov_range", (60.0, 120.0)),
+                             ("cam_pitch_range", (-25.0, 5.0))):
+            s[key] = tuple(s.get(key, default))
         return Config(
-            sim=SimConfig(**d.get("sim", {})),
+            sim=SimConfig(**s),
             model=ModelConfig(**m),
             train=TrainConfig(**d.get("train", {})),
         )

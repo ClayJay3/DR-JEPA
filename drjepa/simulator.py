@@ -18,11 +18,12 @@ goal vector alone, exactly like the real rover.
 """
 
 import math
+from dataclasses import replace
 
 import cv2
 import numpy as np
 
-from .config import SimConfig
+from .config import SimConfig, fov_to_fnorm
 
 # Approximate metres per degree of latitude.
 M_PER_DEG = 111139.0
@@ -108,6 +109,26 @@ def wedge_ground_truth(sim, cells=48, res=0.5, fov_deg=None):
     blocked = np.cumsum(hit, axis=1) - hit.astype(int) > 0
     ok = inside & ~blocked & terrain_ok
     vis[ii[ok], jj[ok]] = True
+
+    # ---- in-frame test: does the camera actually IMAGE this cell? ----
+    # The sweep above only models horizontal FOV and occlusion. That was
+    # sufficient while every episode shared one camera, but with the camera
+    # randomized (height / FOV / mount pitch) it is not: a pitched-down or
+    # narrow lens simply does not see the far cells, and labelling them
+    # visible would train the decoder to invent terrain that is off-frame.
+    # Project each cell's ground point through the episode camera at the pose
+    # that was actually rendered, and keep only what lands inside the image.
+    cam = sim.renderer.cam
+    pitch, roll, _ = sim.camera_angles()
+    R = cam.rotation(sim.yaw, pitch, roll)
+    cam_pos = np.array([sim.x, cam_y, sim.z])
+    pts = np.stack([WX.ravel(), elev.ravel() + h0, WZ.ravel()], axis=1)
+    pc = cam.to_cam(pts, cam_pos, R)
+    uv = cam.project(pc)
+    in_frame = ((pc[:, 2] > cam.znear) &
+                (uv[:, 0] >= 0) & (uv[:, 0] < cam.W) &
+                (uv[:, 1] >= 0) & (uv[:, 1] < cam.H)).reshape(cells, cells)
+    vis &= in_frame
     return occ, vis, elev, sand
 
 
@@ -929,6 +950,20 @@ class RoverSim:
         self.origin = origin
         rng = self.rng
 
+        # --- per-episode camera ---
+        # Drawn FIRST, before the renderer exists, so Camera(), the wedge
+        # labels and the logged camera features all describe one camera.
+        # Every episode used to share the same 1.1 m / 90 deg rig, which made
+        # "read the image row" an exact solution in sim and a catastrophic one
+        # on the ZED (0.6 m). Draws zero rng values when disabled, so
+        # fixed-camera datasets stay byte-identical to the old generator.
+        if self.cfg.cam_randomize:
+            self.cfg = replace(
+                self.cfg,
+                cam_height=float(rng.uniform(*self.cfg.cam_height_range)),
+                fov_deg=float(rng.uniform(*self.cfg.cam_fov_range)),
+                cam_pitch_deg=float(rng.uniform(*self.cfg.cam_pitch_range)))
+
         self.scenario = scenario or rng.choice(SCENARIOS)
         if spawn_mode is None:
             r = rng.random()
@@ -1048,12 +1083,20 @@ class RoverSim:
         self.meas = {"x": mx, "z": mz, "heading": mh % 360.0, "speed": mv}
 
     def sensor_readout(self):
-        """Noisy GPS/compass/odometry, exactly what a real rover would log."""
+        """Noisy GPS/compass/odometry, exactly what a real rover would log.
+
+        The camera descriptor rides along because a real rover knows it too:
+        f_norm and height are fixed by the mount, and pitch comes from the
+        IMU. These are NOT noisy estimates of the world -- they are the rig
+        telling the model which optics it is looking through.
+        """
         lat, lon = meters_to_latlon(self.meas["x"], self.meas["z"], *self.origin)
         glat, glon = meters_to_latlon(self.goal_x, self.goal_z, *self.origin)
+        cam_f, cam_h, cam_p = self.cam_params()
         return {"lat": lat, "lon": lon, "goal_lat": glat, "goal_lon": glon,
                 "heading": self.meas["heading"], "speed": self.meas["speed"],
-                "altitude": float(self.terrain.height(self.x, self.z))}
+                "altitude": float(self.terrain.height(self.x, self.z)),
+                "cam_fnorm": cam_f, "cam_height": cam_h, "cam_pitch": cam_p}
 
     def goal_vector_measured(self):
         """(distance, relative bearing) to goal as the noisy sensors see it."""
@@ -1201,9 +1244,14 @@ class RoverSim:
                 "clearance": self.clearance()}
 
     # ------------- rendering -------------
-    def render(self):
-        """Render the camera frame at the current pose, with terrain-driven
-        pitch/roll plus speed-scaled ride-bump oscillation."""
+    def camera_angles(self):
+        """Instantaneous camera (pitch_deg, roll_deg, speed_frac).
+
+        Terrain slope, plus speed-scaled ride-bump oscillation, plus the
+        episode's MOUNT pitch. Pure read of current state: render() and
+        wedge_ground_truth() both call it, so the labels always describe the
+        image that was actually rendered.
+        """
         hx, hz = self.terrain.slope(self.x, self.z)
         rad = math.radians(self.yaw)
         fx, fz = math.sin(rad), math.cos(rad)
@@ -1213,6 +1261,20 @@ class RoverSim:
         b = self.style.bump_amp_deg * (0.3 + sf)
         pitch += b * math.sin(self.bump_phase[0])
         roll += b * 0.7 * math.sin(self.bump_phase[1])
+        return pitch + self.cfg.cam_pitch_deg, roll, sf
+
+    def cam_params(self):
+        """(f_norm, cam_height_m, pitch_deg) for the CURRENT frame.
+
+        Logged per-row to the CSV and fed to the trunk via camera_features():
+        this is how the model knows which camera it is looking through.
+        """
+        pitch, _, _ = self.camera_angles()
+        return fov_to_fnorm(self.cfg.fov_deg), self.cfg.cam_height, pitch
+
+    def render(self):
+        """Render the camera frame at the current pose."""
+        pitch, roll, sf = self.camera_angles()
         return self.renderer.render(self.x, self.z, self.yaw, pitch, roll,
                                     self.cfg.cam_height, self.obstacles, sf)
 
