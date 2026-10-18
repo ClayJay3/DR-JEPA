@@ -81,11 +81,16 @@ class Navigator:
 
     def __init__(self, perception, camera: Camera = None, robot: RobotProfile = None,
                  cfg: NavConfig = None, grid: GridConfig = None):
-        """`perception` is a checkpoint path, a Perceiver, or any callable
-        (rgb, camera, body_pitch=, body_roll=) -> grids dict."""
+        """`perception` is a .pt checkpoint (PyTorch), an exported .onnx
+        (ONNX Runtime, no torch needed), a Perceiver, or any callable
+        (rgb, camera, R=, t=, body_pitch=, body_roll=) -> grids dict."""
         if isinstance(perception, str):
-            from ..perception.infer import Perceiver
-            perception = Perceiver(perception)
+            if perception.endswith(".onnx"):          # torch-free runtime
+                from ..perception.onnx_runtime import OnnxPerceiver
+                perception = OnnxPerceiver(perception)
+            else:
+                from ..perception.infer import Perceiver
+                perception = Perceiver(perception)
         self.perception = perception
         self.camera = camera
         self.robot = robot or RobotProfile()
