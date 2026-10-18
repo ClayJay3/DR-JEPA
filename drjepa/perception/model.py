@@ -283,7 +283,7 @@ class GeoBEV(nn.Module):
         Kh, C = len(cfg.heights), cfg.cells
         return x.view(B, -1, Kh, C, C).reshape(B, -1, C, C)
 
-    def forward(self, img, K, R, t):
+    def forward(self, img, K, R, t, return_feat=False):
         """img (B, 3, H, W) float RGB in [0, 1] at (input_h, input_w)."""
         x = (img - self.mean) / self.std
         f = self.encoder(x)
@@ -293,6 +293,8 @@ class GeoBEV(nn.Module):
             bev = self.lift(f, K, R, t, img.shape[-2:])
         out = self.bev(bev)
         extra = {"depth_log": self.depth_head(f)[:, 0]} if (self.cfg.depth_aux and self.training) else {}
+        if return_feat:
+            extra["feat"] = f
         return {**extra,
             "vis": out[:, 0], "occ": out[:, 1],
             "obs_h": F.softplus(out[:, 2]),

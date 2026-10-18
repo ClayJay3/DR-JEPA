@@ -19,12 +19,12 @@ FLIP = np.diag([-1.0, 1.0, 1.0])
 
 
 def load_episode_meta(d):
-    """(camera dict, domain, n_frames, rgb filename pattern) for an episode dir."""
+    """(camera dict, domain, n_frames, rgb filename pattern, labeled) for an episode dir."""
     with open(os.path.join(d, "episode.json")) as f:
         m = json.load(f)
-    real = os.path.isdir(os.path.join(d, "depth"))
+    real = os.path.isdir(os.path.join(d, "depth")) or m.get("domain") == "real"
     return m["camera"], m.get("domain", "real" if real else "sim"), int(m["frames"]), \
-        "{:05d}.jpg" if real else "{:04d}.jpg"
+        "{:05d}.jpg" if real else "{:04d}.jpg", bool(m.get("labeled", True))
 
 
 def parse_spec(spec):
@@ -48,7 +48,7 @@ class FrameDataset(Dataset):
         self.dirs = [p for p, _ in parsed]
         self.meta = [load_episode_meta(d) for d in self.dirs]
         self.index = []
-        for e, (_, _, n, _) in enumerate(self.meta):
+        for e, (_, _, n, _, _) in enumerate(self.meta):
             a, b = parsed[e][1]
             ks = list(range(int(a * n), int(b * n), stride))
             if max_frames:
@@ -56,6 +56,7 @@ class FrameDataset(Dataset):
             self.index += [(e, k) for k in ks]
         self.index = np.array(self.index, np.int64).reshape(-1, 2)
         self.is_real = np.array([self.meta[e][1] == "real" for e, _ in self.index], bool)
+        self.labeled = np.array([self.meta[e][4] for e, _ in self.index], bool)
         self._cache = {}
 
     def __len__(self):
@@ -77,7 +78,7 @@ class FrameDataset(Dataset):
 
     def __getitem__(self, i):
         e, k = self.index[i]
-        cam, dom, _, pat = self.meta[e]
+        cam, dom, _, pat, labeled = self.meta[e]
         L = self._labels(e)
         C = L["cells"]
         fid = k if L["ids"] is None else int(L["ids"][k])
@@ -125,7 +126,8 @@ class FrameDataset(Dataset):
                "K": torch.tensor(K, dtype=torch.float32),
                "R": torch.tensor(R, dtype=torch.float32),
                "t": torch.tensor(t, dtype=torch.float32),
-               "is_real": torch.tensor(float(dom == "real"))}
+               "is_real": torch.tensor(float(dom == "real")),
+               "is_labeled": torch.tensor(float(labeled))}
         out.update({kk: torch.from_numpy(np.ascontiguousarray(v)) for kk, v in y.items()})
         return out
 

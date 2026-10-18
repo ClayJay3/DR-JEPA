@@ -32,6 +32,9 @@ class OnnxPerceiver:
         so = ort.SessionOptions()
         if threads:
             so.intra_op_num_threads = int(threads)
+        if self.manifest.get("ort_graph_optimization") == "disable":
+            # DINOv3 outlier tokens break ORT's fused kernels (see export.py)
+            so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
         self.session = ort.InferenceSession(path, so, providers=providers or ["CPUExecutionProvider"])
         self.w = self.manifest["input"]["width"]
         self.h = self.manifest["input"]["height"]

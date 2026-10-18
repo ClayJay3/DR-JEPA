@@ -29,16 +29,22 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from .dataset import FrameDataset
 from .model import GeoBEV, ModelConfig, count_params
 
-LOSS_W = {"vis": 1.0, "occ": 2.0, "obs_h": 1.0, "elev": 1.0, "grade": 1.0, "sand": 0.5, "depth": 0.5}
+LOSS_W = {"vis": 1.0, "occ": 2.0, "obs_h": 1.0, "elev": 1.0, "grade": 1.0, "sand": 0.5, "depth": 0.5,
+          "feat": 1.0, "kd": 1.0}
 
 
-def compute_losses(out, b, cells):
-    """Masked per-channel losses; returns (total, parts dict)."""
+def compute_losses(out, b, cells, teacher=None):
+    """Masked per-channel losses; returns (total, parts dict).
+
+    `teacher` (optional): outputs of a frozen teacher GeoBEV on the same
+    inputs, incl. its encoder features -> feature + output distillation.
+    Unlabeled frames (b["is_labeled"] = 0) only feed the distillation terms."""
     dev = out["occ"].device
     real = b["is_real"].view(-1, 1, 1)
+    lab = b.get("is_labeled", torch.ones_like(b["is_real"])).view(-1, 1, 1)
     vis = b["vis"]
     zw = torch.linspace(1.5, 0.6, cells, device=dev).view(1, 1, cells)      # near rows matter more
-    m = vis * zw
+    m = vis * zw * lab
     msum = m.sum().clamp(min=1.0)
     # elevation / grade can be unknown (NaN) on real cells that only see an
     # object: supervise them nowhere rather than at a made-up value
@@ -50,7 +56,8 @@ def compute_losses(out, b, cells):
     smsum = sim_m.sum().clamp(min=1.0)
     occ = b["occ"]
     parts = {
-        "vis": F.binary_cross_entropy_with_logits(out["vis"], vis),
+        "vis": (F.binary_cross_entropy_with_logits(out["vis"], vis, reduction="none") * lab).sum()
+               / (lab.sum() * cells * cells).clamp(min=1.0),
         "occ": (F.binary_cross_entropy_with_logits(out["occ"], occ, reduction="none",
                                                    pos_weight=torch.tensor(3.0, device=dev)) * m).sum() / msum,
         "obs_h": (F.smooth_l1_loss(out["obs_h"], b["obs_h"].clamp(0, 2.5), beta=0.1, reduction="none")
@@ -67,6 +74,19 @@ def compute_losses(out, b, cells):
         dv = ((d > 0.2) & (d < 60)).float()
         err = (out["depth_log"] - torch.log(d.clamp(min=0.2))).abs()
         parts["depth"] = (err * dv).sum() / dv.sum().clamp(min=1.0)
+    if teacher is not None:
+        tf, sf = teacher["feat"], out["feat"]
+        parts["feat"] = ((sf - tf) ** 2).mean() / tf.var().clamp(min=1e-6)
+        tv = torch.sigmoid(teacher["vis"]) * zw                    # trust the teacher where it sees
+        tvs = tv.sum().clamp(min=1.0)
+        kd = 0.0
+        for k in ("occ", "sand"):
+            kd = kd + (F.binary_cross_entropy_with_logits(out[k], torch.sigmoid(teacher[k]), reduction="none")
+                       * tv).sum() / tvs
+        kd = kd + F.binary_cross_entropy_with_logits(out["vis"], torch.sigmoid(teacher["vis"]))
+        for k in ("obs_h", "elev", "grade"):
+            kd = kd + (F.smooth_l1_loss(out[k], teacher[k], beta=0.1, reduction="none") * tv).sum() / tvs
+        parts["kd"] = kd
     total = sum(LOSS_W[k] * v for k, v in parts.items())
     return total, {k: float(v.detach()) for k, v in parts.items()}
 
@@ -157,6 +177,10 @@ def main():
     ap.add_argument("--encoder", default="efficientnet_b0")
     ap.add_argument("--lift", default="geometric", choices=["geometric", "implicit"])
     ap.add_argument("--depth_aux", action="store_true", help="training-only depth supervision")
+    ap.add_argument("--teacher", default=None, help="frozen GeoBEV checkpoint to distill from")
+    ap.add_argument("--unlabeled", nargs="*", default=[], help="unlabeled real episodes (distillation only)")
+    ap.add_argument("--init_head_from_teacher", action="store_true",
+                    help="start the lift + top-down head from the teacher's weights")
     ap.add_argument("--input_w", type=int, default=512)
     ap.add_argument("--input_h", type=int, default=320)
     ap.add_argument("--epochs", type=int, default=10)
@@ -178,7 +202,7 @@ def main():
     sim_tr, sim_val = sim_split(a.sim)
     if a.max_sim_eps:
         sim_tr = sim_tr[:a.max_sim_eps]
-    train_ds = FrameDataset(sim_tr + list(a.real), mcfg, train=True, depth=a.depth_aux)
+    train_ds = FrameDataset(sim_tr + list(a.real) + list(a.unlabeled), mcfg, train=True, depth=a.depth_aux)
     val_sim = FrameDataset(sim_val, mcfg, train=False, stride=3)
     val_real = FrameDataset(a.val_real, mcfg, train=False) if a.val_real else None
     n_real = int(train_ds.is_real.sum())
@@ -195,6 +219,21 @@ def main():
           f"val: {len(val_sim)} sim + {len(val_real) if val_real else 0} real")
 
     model = GeoBEV(mcfg).to(dev)
+    teacher = None
+    if a.teacher:
+        tck = torch.load(a.teacher, map_location="cpu", weights_only=False)
+        tcfg = ModelConfig.from_dict(tck["model_cfg"])
+        tcfg.pretrained = False
+        teacher = GeoBEV(tcfg)
+        teacher.load_state_dict(tck["model"])
+        teacher.to(dev).eval()
+        for p in teacher.parameters():
+            p.requires_grad = False
+        if a.init_head_from_teacher:
+            head = {k: v for k, v in tck["model"].items() if k.startswith("bev.")}
+            model.load_state_dict(head, strict=False)
+            print(f"  student head initialised from teacher ({len(head)} tensors)")
+        print(f"  distilling from {a.teacher} [{tcfg.encoder}]")
     print(f"GeoBEV[{a.encoder}] trainable params {count_params(model) / 1e6:.2f} M")
     enc = [p for p in model.encoder.parameters() if p.requires_grad]
     rest = [p for n, p in model.named_parameters() if not n.startswith("encoder.") and p.requires_grad]
@@ -212,10 +251,15 @@ def main():
         t0, agg, n = time.time(), {}, 0
         for b in tl:
             b = to_dev(b, dev)
+            tout = None
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                out = model(b["img"], b["K"], b["R"], b["t"])
+                if teacher is not None:
+                    with torch.no_grad():
+                        tout = {k: v.float() for k, v in
+                                teacher(b["img"], b["K"], b["R"], b["t"], return_feat=True).items()}
+                out = model(b["img"], b["K"], b["R"], b["t"], return_feat=teacher is not None)
             out = {k: v.float() for k, v in out.items()}
-            loss, parts = compute_losses(out, b, mcfg.cells)
+            loss, parts = compute_losses(out, b, mcfg.cells, tout)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 2.0)

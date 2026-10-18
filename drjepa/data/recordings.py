@@ -226,3 +226,45 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def build_unlabeled_arcore(rec_dir, height=None, grid=None, every=1):
+    """ARCore phone recording (frames/ + meta.jsonl + session.json) ->
+    UNLABELED episode: images, camera and gravity-aligned poses only.
+
+    Used for distillation (a teacher network supplies the targets), so the
+    handheld height only has to be plausible: teacher and student see the
+    same assumed geometry."""
+    grid = grid or GridConfig()
+    with open(os.path.join(rec_dir, "session.json")) as f:
+        sess = json.load(f)
+    h = float(height or sess.get("cam_height_m", 1.4))
+    rows = [json.loads(line) for line in open(os.path.join(rec_dir, "meta.jsonl")) if line.strip()]
+    rows = [r for r in rows[::every] if int(r.get("rot", 0)) == 0 and
+            os.path.exists(os.path.join(rec_dir, "frames", f"{int(r['i']):05d}.jpg"))]
+    n, C = len(rows), grid.cells
+    Rs, ts, ids = [], [], []
+    for r in rows:
+        R, t = robot_frame_pose(np.array(r["pose"][3:7]), h)
+        Rs.append(R)
+        ts.append(t)
+        ids.append(int(r["i"]))
+    zb = np.zeros((n, (C * C + 7) // 8), np.uint8)
+    zf = np.zeros((n, C, C), np.float16)
+    np.savez_compressed(os.path.join(rec_dir, "labels.npz"), vis=zb, occ=zb, obs_h=zf, elev=zf, grade=zf,
+                        sand=np.zeros((n, C, C), np.uint8), R=np.stack(Rs).astype(np.float32),
+                        t=np.stack(ts).astype(np.float32), speed=np.zeros(n, np.float32),
+                        yaw_rate=np.zeros(n, np.float32), imu_pitch=np.zeros(n, np.float32),
+                        imu_roll=np.zeros(n, np.float32), pose=np.zeros((n, 3), np.float32),
+                        frame_ids=np.array(ids, np.int64), cells=C, res=grid.res)
+    rgb = os.path.join(rec_dir, "rgb")
+    if not os.path.exists(rgb):
+        os.symlink("frames", rgb)
+    cam = Camera(sess["cpu_w"], sess["cpu_h"], sess["fx"], sess["fy"], sess["cx"], sess["cy"],
+                 mount_height=h)
+    with open(os.path.join(rec_dir, "episode.json"), "w") as f:
+        json.dump({"camera": cam.to_dict(), "domain": "real", "labeled": False, "frames": n,
+                   "sensor": sess.get("device", "phone"), "label_source": "none (distillation only)"},
+                  f, indent=1)
+    print(f"  {os.path.basename(rec_dir)}: {n} unlabeled frames (camera height assumed {h:.2f} m)")
+    return n

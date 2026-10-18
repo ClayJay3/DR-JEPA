@@ -90,6 +90,11 @@ def export(checkpoint, out, opset=17):
                     "sand_logit": "soft ground, logit"},
         "model_cfg": cfg.to_dict(),
         "trained_epoch": ck.get("epoch"),
+        # DINOv3 has a few tokens with enormous activations; ONNX Runtime's
+        # fused kernels (LayerNorm / attention rewrites) lose them -- measured
+        # errors of 1-4 logits and even NaN on real frames, while the unfused
+        # graph matches PyTorch to 2e-4. CNN encoders are unaffected.
+        "ort_graph_optimization": "disable" if cfg.encoder.startswith("dinov3") else "all",
     }
     with open(os.path.splitext(out)[0] + ".json", "w") as f:
         json.dump(manifest, f, indent=1)
@@ -99,6 +104,8 @@ def export(checkpoint, out, opset=17):
 def verify(model, cfg, args, path):
     import onnxruntime as ort
     model.eval()
+    level = (ort.GraphOptimizationLevel.ORT_DISABLE_ALL if cfg.encoder.startswith("dinov3")
+             else ort.GraphOptimizationLevel.ORT_ENABLE_ALL)
     with torch.no_grad():
         ref = ExportWrapper(model)(*args)
     feeds = {n: a.numpy() for n, a in zip(["image", "K", "R", "t"], args)}
@@ -106,6 +113,7 @@ def verify(model, cfg, args, path):
     for threads in (4, 1):
         so = ort.SessionOptions()
         so.intra_op_num_threads = threads
+        so.graph_optimization_level = level
         s = ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
         out = s.run(None, feeds)
         for _ in range(2):
