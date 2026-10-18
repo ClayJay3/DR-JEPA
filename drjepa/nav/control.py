@@ -2,8 +2,9 @@
 
 Every step: pick a waypoint ~7 m along the route, roll out 17 constant-
 curvature arcs (2.4 s), reject arcs that come too close to believed
-obstacles (fused map AND the zero-lag fresh-frame guard) or cross believed
-steep ground, and score the rest on progress + clearance + alignment +
+obstacles (fused map AND the zero-lag fresh-frame guard) or would cross
+believed slopes past the robot's roll / downhill / climb limits *in the
+direction the arc travels* (robots tip sideways first), and score the rest on progress + clearance + alignment +
 smoothness -- the privileged expert's recipe on the believed world.
 
 Recovery behaviours (all measured necessary in v9-v12):
@@ -35,7 +36,9 @@ class ControlConfig:
     map_buffer: float = 0.2          # clearance buffer beyond the radius (map)
     guard_buffer: float = 0.1        # ... for the fresh-frame guard (no pose error)
     min_clear: float = 0.05
-    haz_reject: float = 0.9          # x tip_roll: arc rejected on fused grade
+    roll_reject: float = 0.8         # x tip_roll: arc rejected on believed side slope
+    descend_reject: float = 0.8      # x tip_pitch: ... on believed downhill grade
+    climb_reject: float = 0.9        # x grade_block: ... on believed uphill grade
     stuck_speed: float = 0.35
     stuck_frames: int = 12
 
@@ -120,9 +123,9 @@ class Controller:
         ai, aj = bmap.index(pts[..., 0], pts[..., 1])
         n = bmap.cfg.cells
         ai, aj = np.clip(ai, 0, n - 1), np.clip(aj, 0, n - 1)
-        g_arc = np.where(bmap.GW[ai, aj] > 0.3, bmap.G[ai, aj], 0.0)
-        steep = g_arc.max(axis=1) > c.haz_reject * rb.tip_roll
-        steep_near = g_arc[:, :3].max(axis=1) > c.haz_reject * rb.tip_roll
+        pitch_g, roll_g = bmap.slope_along(ai, aj, seg_yaw)
+        steep = ((roll_g > c.roll_reject * rb.tip_roll) | (-pitch_g > c.descend_reject * rb.tip_pitch)
+                 | (pitch_g > c.climb_reject * rb.grade_block)).any(axis=1)
         feasible &= ~steep
         clear = np.where(steep, np.minimum(clear, 0.0), clear)
 
@@ -148,12 +151,6 @@ class Controller:
                 bear = math.atan2(target[0] - pose[0], target[1] - pose[1])
                 err = (bear - yaw + math.pi) % (2 * math.pi) - math.pi
                 steer = float(np.clip(err / math.radians(35.0), -1, 1))
-                # creep only where the ground is believed safe: a tip-over is
-                # terminal (measured: creeping onto believed 0.49-0.54 grade
-                # ground was how two of six slope tip-overs happened)
-                if steep_near[int(np.argmin(np.abs(steers - steer)))]:
-                    self.recovery, self.recovery_steer = 14, side
-                    return self._reverse(side)
                 self.prev_steer = steer
                 self.mode = "creep"
                 return 0.25, steer

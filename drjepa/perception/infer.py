@@ -55,7 +55,10 @@ class Perceiver:
         tt = torch.as_tensor(np.asarray(t), dtype=torch.float32, device=dev)[None]
         with torch.autocast(dev.type, dtype=torch.float16, enabled=self.half):
             out = self.model(x, Kt, Rt, tt)
-        o = {k: v[0].float().cpu().numpy() for k, v in out.items()}
+        # one device -> host copy (each .cpu() is a sync)
+        names = list(out)
+        stack = torch.stack([out[k][0].float() for k in names]).cpu().numpy()
+        o = dict(zip(names, stack))
         return {"occ": 1 / (1 + np.exp(-o["occ"])), "occ_logit": o["occ"],
                 "vis": 1 / (1 + np.exp(-o["vis"])), "obs_h": o["obs_h"], "elev": o["elev"],
                 "grade": o["grade"], "sand": 1 / (1 + np.exp(-o["sand"]))}

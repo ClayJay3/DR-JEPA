@@ -8,6 +8,7 @@ Channels
     L       occupancy log-odds (prior-corrected Bayesian update)
     E, EW   terrain elevation: confidence-weighted running mean (+ weight)
     G, GW   terrain grade: confidence-weighted running mean (+ weight)
+    SX, SZ  world-frame slope vector (uphill, |S| ~ grade), same weights as G
     LS      soft-ground (sand) log-odds
 
 Why each occupancy rule exists (all measured in v8-v12, kept verbatim):
@@ -21,6 +22,10 @@ Why each occupancy rule exists (all measured in v8-v12, kept verbatim):
 Slope and elevation are continuous, so they fuse as weighted means with
 trust falling off with range (1.0 within 4 m, 0.5 to 8 m, 0.25 beyond):
 far estimates never accumulate, and near views overwrite them on approach.
+The slope vector takes its magnitude from the grade head and its direction
+from the elevation head's gradient (median 9 deg error on steep sim cells):
+robots tip sideways long before they tip forward, so traversability depends
+on the direction of travel.
 """
 
 import math
@@ -56,7 +61,7 @@ class MapConfig:
 class BeliefMap:
     """Multi-channel world map + per-frame fusion (see module docstring)."""
 
-    CHANNELS = ("L", "E", "EW", "G", "GW", "LS")
+    CHANNELS = ("L", "E", "EW", "G", "GW", "SX", "SZ", "LS")
 
     def __init__(self, cfg: MapConfig, grid):
         self.cfg, self.grid = cfg, grid
@@ -156,8 +161,12 @@ class BeliefMap:
         h0 = float((self.E[ci - 2:ci + 3, cj - 2:cj + 3] * w_h).sum() / w_h.sum()) if w_h.sum() > 0.5 else 0.0
         iv, jv = ii[ok], jj[ok]
         w = (conf * self._range_w)[ok]
-        self._wmean("E", "EW", iv, jv, g["elev"][ok] + h0, w, cap=20.0)
-        self._wmean("G", "GW", iv, jv, g["grade"][ok], w, cap=20.0)
+        self._wmean(("E",), "EW", iv, jv, (g["elev"][ok] + h0,), w, cap=20.0)
+        ex, ez = np.gradient(g["elev"].astype(np.float32), self.grid.res)
+        k = g["grade"] / np.maximum(np.hypot(ex, ez), 1e-3)
+        c, s = math.cos(math.radians(yaw_deg)), math.sin(math.radians(yaw_deg))
+        sx, sz = (ex * c + ez * s) * k, (-ex * s + ez * c) * k     # robot -> world
+        self._wmean(("G", "SX", "SZ"), "GW", iv, jv, (g["grade"][ok], sx[ok], sz[ok]), w, cap=20.0)
         sev = np.clip(np.log(np.clip(g["sand"], 1e-4, 1 - 1e-4) / np.clip(1 - g["sand"], 1e-4, 1)) - cfg.sand_prior_logit, -4, 4)
         sev = np.where(sev > 0, sev * 0.5, sev)
         np.add.at(self.LS, (iv, jv), (sev * conf)[ok] * cfg.evidence_gain)
@@ -170,17 +179,20 @@ class BeliefMap:
         self.guard_pose = (pose.copy(), yaw_deg)
         return pose
 
-    def _wmean(self, name, wname, i, j, v, w, cap):
-        V, Wt = getattr(self, name), getattr(self, wname)
+    def _wmean(self, names, wname, i, j, vals, w, cap):
+        """Weighted running mean of channels `names` sharing weight `wname`."""
+        Wt = getattr(self, wname)
         # several grid cells can land in one map cell: accumulate first
-        num = np.zeros_like(V)
         den = np.zeros_like(Wt)
-        np.add.at(num, (i, j), v * w)
         np.add.at(den, (i, j), w)
         m = den > 0
-        newW = np.minimum(Wt[m] + den[m], cap)
-        V[m] = (V[m] * Wt[m] + num[m]) / np.maximum(Wt[m] + den[m], 1e-6)
-        Wt[m] = newW
+        tot = np.maximum(Wt[m] + den[m], 1e-6)
+        for name, v in zip(names, vals):
+            V = getattr(self, name)
+            num = np.zeros_like(V)
+            np.add.at(num, (i, j), v * w)
+            V[m] = (V[m] * Wt[m] + num[m]) / tot
+        Wt[m] = np.minimum(Wt[m] + den[m], cap)
 
     def _vo_shift(self, ii, jj, upd, ok):
         """Scan-match the new evidence against established map structure;
@@ -228,6 +240,20 @@ class BeliefMap:
             return 99.0
         ci = self.grid.cells // 2
         return float(self.guard_dist[ci - half_w:ci + half_w + 1, :depth].min())
+
+    def slope_along(self, ai, aj, heading_rad):
+        """Believed (pitch, roll) grade for travel at `heading_rad` (from
+        north, clockwise) through map cells (ai, aj); pitch > 0 is uphill.
+        Disagreement between fused directions counts as roll (|mean vector|
+        < mean grade), so an uncertain direction is treated as side slope."""
+        known = self.GW[ai, aj] > 0.3
+        G = np.where(known, self.G[ai, aj], 0.0)
+        vx = np.where(known, self.SX[ai, aj], 0.0)
+        vz = np.where(known, self.SZ[ai, aj], 0.0)
+        fx, fz = np.sin(heading_rad), np.cos(heading_rad)
+        pitch = vx * fx + vz * fz
+        roll = np.maximum(np.abs(vx * fz - vz * fx), G - np.hypot(vx, vz))
+        return pitch, roll
 
     def prob(self, sl=None):
         """Occupancy probability (optionally of a window slice)."""

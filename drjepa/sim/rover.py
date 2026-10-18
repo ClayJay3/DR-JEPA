@@ -213,7 +213,7 @@ class RoverSim:
         self.collided_now = False
 
         pitch_g, roll_g = self.terrain_pose(nx, nz)
-        if abs(roll_g) > rb.tip_roll or pitch_g < -rb.tip_roll * 1.4:
+        if abs(roll_g) > rb.tip_roll or pitch_g < -rb.tip_pitch:
             self.tipped = True
             self.v = 0.0
         elif pitch_g > rb.grade_block and self.v > 0:

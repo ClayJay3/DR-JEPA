@@ -40,6 +40,21 @@ def test_fusion_marks_obstacle_in_world_frame():
     assert m.prob()[int(i2), int(j2)] < 0.1
 
 
+def test_slope_is_direction_aware():
+    grid = GridConfig()
+    m = BeliefMap(MapConfig(vo=False), grid)
+    m.init_at(np.zeros(2))
+    g = grids()
+    g["elev"] = (m._gx * 0.5).astype(np.float32)     # rises to the robot's right
+    g["grade"] = np.full_like(g["elev"], 0.5)
+    for _ in range(5):                                # facing east: right = south
+        m.fuse(g, np.zeros(2), 90.0)
+    i, j = m.index(np.array(5.0), np.array(0.0))
+    pitch, roll = m.slope_along(i, j, np.radians([0.0, 90.0, 180.0]))
+    np.testing.assert_allclose(pitch, [-0.5, 0.0, 0.5], atol=0.02)   # north = downhill
+    np.testing.assert_allclose(roll, [0.0, 0.5, 0.0], atol=0.02)
+
+
 def test_planner_routes_around_believed_obstacle():
     grid, rb = GridConfig(), RobotProfile()
     m = BeliefMap(MapConfig(vo=False), grid)

@@ -186,7 +186,7 @@ def main():
     ap.add_argument("--record", type=int, default=0, help="record the first N episodes of worker 0")
     ap.add_argument("--record_dir", default="bench/videos")
     ap.add_argument("--nav", nargs="*", default=[],
-                    help="navigation overrides, e.g. control.haz_reject=0.8 planner.fatal_slope=0.85")
+                    help="navigation overrides, e.g. control.roll_reject=0.7 planner.fatal_slope=0.85")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     seeds = list(range(a.seed, a.seed + a.episodes))

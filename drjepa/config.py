@@ -25,6 +25,7 @@ class RobotProfile:
     grade_drive: float = 0.35         # comfortable grade (rise/run)
     grade_block: float = 0.55         # climbing steeper than this stalls
     tip_roll: float = 0.50            # lateral grade that tips the robot
+    tip_pitch: float = 0.70           # downhill grade that pitches it over
     sand_drag: float = 0.55           # fraction of speed lost in deep sand
 
     @property

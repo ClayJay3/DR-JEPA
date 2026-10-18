@@ -82,8 +82,8 @@ camera = Camera(width=1280, height=720, fx=522.6, fy=522.6, cx=634.7, cy=352.1, 
                 mount_height=0.40,      # optical centre above the ground (m)
                 mount_pitch=0.0,        # deg, + = looking up, relative to the chassis
                 mount_roll=0.0)         # deg
-robot = RobotProfile(radius=0.75, v_max=2.0, yaw_rate_max=70.0,
-                     step_height=0.25, grade_drive=0.35, tip_roll=0.50)
+robot = RobotProfile(radius=0.75, v_max=2.0, yaw_rate_max=70.0, step_height=0.25,
+                     grade_drive=0.35, grade_block=0.55, tip_roll=0.50, tip_pitch=0.70)
 nav = Navigator("geobev.onnx", camera=camera, robot=robot)   # .onnx -> no torch needed
 
 while True:
@@ -103,7 +103,8 @@ while True:
   filter, or pass `"x"`, `"z"` (metres east/north), `"heading"` and
   `"goal_x"`, `"goal_z"` from your own estimator (VIO, EKF, ZED tracking).
 - **Robot.** `RobotProfile` sets the footprint, dynamics, step height and
-  slope limits that turn perception into costs. `steer = +1` means turn
+  slope limits (comfortable, climbable, side-slope and downhill tip limits,
+  as rise / run) that turn perception into costs. `steer = +1` means turn
   right at `yaw_rate_max`; `throttle` is a fraction of top speed.
 - **Rate.** The controller assumes 10 Hz (`NavConfig.dt`).
 
