@@ -88,6 +88,7 @@ def _f1(pred, gt):
 def evaluate(method, episodes, frames=None, stride=1, extra_mask=None):
     """Run a method over episodes and score it. Returns a nested dict."""
     acc = {b: {"s": [], "y": [], "pred": [], "e_err": [], "pred_vis": [], "vis": []} for b in BANDS}
+    steep = {"score": [], "true": []}
     for ep in episodes:
         ks = range(0, len(ep), stride) if frames is None else frames
         C, res = ep.cells, ep.res
@@ -115,6 +116,11 @@ def evaluate(method, episodes, frames=None, stride=1, extra_mask=None):
                 if "vis" in out:
                     a["pred_vis"].append(out["vis"][band] > 0.5)
                     a["vis"].append(ep.vis[k][band])
+            if "grade" in out and ep.domain == "sim":
+                gm = vis & np.isfinite(ep.grade[k])
+                gm[:, zc >= 12.0] = False
+                steep["score"].append(out["grade"][gm])
+                steep["true"].append(ep.grade[k][gm])
     res = {}
     for b, a in acc.items():
         if not a["s"]:
@@ -133,13 +139,27 @@ def evaluate(method, episodes, frames=None, stride=1, extra_mask=None):
             pv, gv = np.concatenate(a["pred_vis"]), np.concatenate(a["vis"])
             r["vis_iou"] = float((pv & gv).sum() / max((pv | gv).sum(), 1))
         res[f"{b[0]:.0f}-{b[1]:.0f}m"] = r
+    if steep["true"]:
+        sc, tr = np.concatenate(steep["score"]), np.concatenate(steep["true"])
+        st = tr > 0.45
+        res["steep"] = {"n_steep": int(st.sum()), "auc": _auc(sc, st),
+                        "recall_at_0.46": float((sc[st] > 0.46).mean()) if st.any() else float("nan"),
+                        "bias_on_steep": float((sc[st] - tr[st]).mean()) if st.any() else float("nan"),
+                        "false_steep_rate": float((sc[~st & (tr < 0.3)] > 0.46).mean())}
     return res
 
 
 def format_table(name, res):
     """One printable block per method."""
     lines = [f"== {name}"]
+    if "steep" in res:
+        s = res["steep"]
+        lines.append(f"   steep ground (grade > 0.45, <= 12 m): n {s['n_steep']}  AUC {s['auc']:.3f}  "
+                     f"recall@0.46 {s['recall_at_0.46']:.2f}  bias {s['bias_on_steep']:+.3f}  "
+                     f"false-steep {s['false_steep_rate']:.3f}")
     for band, r in res.items():
+        if band == "steep":
+            continue
         lines.append(f"   {band:>7s}  cells {r['n_cells']:7d} occ {r['obstacle_rate']*100:5.2f}%  "
                      f"AUC {r['auc']:.3f}  bestF1 {r['best_f1']:.3f}  F1 {r['f1']:.3f} "
                      f"(P {r['precision']:.2f} R {r['recall']:.2f})"

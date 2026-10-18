@@ -33,6 +33,16 @@ LOSS_W = {"vis": 1.0, "occ": 2.0, "obs_h": 1.0, "elev": 1.0, "grade": 1.0, "sand
           "feat": 1.0, "kd": 1.0}
 
 
+GRADE_Q = 0.5            # pinball quantile for the grade head (0.5 = L1)
+GRADE_STEEP_W = 0.0      # extra weight on steep cells (grade 0.25 -> 0.55)
+
+
+def _pinball(pred, target, q):
+    """Quantile loss: q > 0.5 penalizes UNDER-estimation more."""
+    d = target - pred
+    return torch.maximum(q * d, (q - 1) * d)
+
+
 def compute_losses(out, b, cells, teacher=None):
     """Masked per-channel losses; returns (total, parts dict).
 
@@ -64,8 +74,13 @@ def compute_losses(out, b, cells, teacher=None):
                   * m * (1 + 2 * occ)).sum() / msum,
         "elev": (F.smooth_l1_loss(out["elev"], elev_gt.clamp(-3.4, 3.4), beta=0.1, reduction="none")
                  * me).sum() / me.sum().clamp(min=1.0),
-        "grade": (F.smooth_l1_loss(out["grade"], grade_gt.clamp(0, 1.5), beta=0.05, reduction="none")
-                  * sim_m).sum() / smsum,
+        # slopes that tip a robot are rare; plain regression shrinks them toward
+        # the flat majority (measured: every sim tip-over happened on observed
+        # ground believed 0.12-0.42 where the truth was 0.53-0.73). Weight the
+        # steep cells up and, optionally, err toward steeper when unsure.
+        "grade": ((_pinball(out["grade"], grade_gt.clamp(0, 1.5), GRADE_Q) if GRADE_Q != 0.5 else
+                   F.smooth_l1_loss(out["grade"], grade_gt.clamp(0, 1.5), beta=0.05, reduction="none"))
+                  * (1 + GRADE_STEEP_W * ((grade_gt - 0.25) / 0.3).clamp(0, 1)) * sim_m).sum() / smsum,
         "sand": (F.binary_cross_entropy_with_logits(out["sand"], b["sand"], reduction="none")
                  * sim_m).sum() / smsum,
     }
@@ -178,6 +193,10 @@ def main():
     ap.add_argument("--lift", default="geometric", choices=["geometric", "implicit"])
     ap.add_argument("--depth_aux", action="store_true", help="training-only depth supervision")
     ap.add_argument("--teacher", default=None, help="frozen GeoBEV checkpoint to distill from")
+    ap.add_argument("--grade_q", type=float, default=0.5,
+                    help="grade pinball quantile (>0.5 = prefer over-estimating slopes)")
+    ap.add_argument("--grade_steep_w", type=float, default=0.0,
+                    help="extra grade-loss weight on steep cells (0.25-0.55 grade ramp)")
     ap.add_argument("--unlabeled", nargs="*", default=[], help="unlabeled real episodes (distillation only)")
     ap.add_argument("--init_head_from_teacher", action="store_true",
                     help="start the lift + top-down head from the teacher's weights")
@@ -194,6 +213,8 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
 
+    global GRADE_Q, GRADE_STEEP_W
+    GRADE_Q, GRADE_STEEP_W = a.grade_q, a.grade_steep_w
     torch.manual_seed(a.seed)
     np.random.seed(a.seed)
     dev = torch.device("cuda")

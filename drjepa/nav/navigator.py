@@ -95,13 +95,25 @@ class Navigator:
         self.camera = camera
         self.robot = robot or RobotProfile()
         self.cfg = cfg or NavConfig()
-        self.grid = grid or GridConfig()
+        self.grid = grid or self._model_grid(perception) or GridConfig()
         self.map = BeliefMap(self.cfg.map, self.grid)
         self.planner = Planner(self.robot, self.cfg.planner)
         self.controller = Controller(self.robot, self.cfg.control)
         self.pose_filter = PoseFilter(self.cfg.dt, self.cfg.gps_gain)
         self.timing = collections.defaultdict(float)
         self.reset()
+
+    @staticmethod
+    def _model_grid(perception):
+        """The ground grid the perception model was trained on (so fusion
+        never mis-registers a model trained at another size / resolution)."""
+        cfg = getattr(perception, "cfg", None)
+        if cfg is not None and hasattr(cfg, "cells"):
+            return GridConfig(cells=cfg.cells, res=cfg.res)
+        man = getattr(perception, "manifest", None)
+        if man is not None:
+            return GridConfig(cells=man["grid"]["cells"], res=man["grid"]["res_m"])
+        return None
 
     def reset(self):
         """New run = new memory."""
