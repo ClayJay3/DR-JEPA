@@ -243,3 +243,12 @@ data_v11*/
 belief_*/
 matrix_*/
 *.drjepa
+
+# DR-JEPA generated / raw data (never commit)
+recordings/
+packed/
+runs/
+eval_out/
+bench/
+*.pth
+*.onnx
