@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drjepa"
+version = "13.0.0"
+description = "Camera-only rover navigation for any robot and any camera: image -> metric ground grid -> persistent map -> A*."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Mars Rover Design Team" }]
+dependencies = [
+    "numpy>=1.26",
+    "opencv-python-headless>=4.8",
+    "torch>=2.2",
+    "torchvision>=0.17",
+]
+
+[project.optional-dependencies]
+# GPU simulator, data generation and closed-loop evaluation
+sim = ["moderngl>=5.10"]
+# depth-model teacher (pseudo-labels / baseline) and the DINOv3 encoder option
+teacher = ["transformers>=4.56"]
+# deployment: ONNX export + CPU runtime
+export = ["onnx>=1.16", "onnxruntime>=1.18"]
+dev = ["pytest>=8", "ruff>=0.5", "scipy>=1.11"]
+all = ["drjepa[sim,teacher,export,dev]"]
+
+[project.scripts]
+drjepa = "drjepa.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["drjepa*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E731", "B905", "E501"]

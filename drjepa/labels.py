@@ -143,7 +143,7 @@ def depth_targets(depth, cam, R, t, grid: GridConfig, valid=None, step=0.25,
                   min_pts=3, band_hi=2.5, dmin=0.3, dmax=20.0):
     """Targets from a metric depth map in the camera frame.
 
-    Per cell: ground = 15th-percentile point height (robust to anything
+    Per cell: ground = 10th-percentile point height (robust to anything
     standing on it); obstacle height = 95th percentile above the local
     ground. Cells that see only an object (no ground) get elevation / grade
     NaN = unknown, never the object's height. Returns the same dict as
@@ -170,23 +170,25 @@ def depth_targets(depth, cam, R, t, grid: GridConfig, valid=None, step=0.25,
         ok = cnt >= min_pts
         s, e, c = starts[ok], ends[ok], cnt[ok]
         cells = idx[s]
-        ground[cells] = h[s + (0.15 * (c - 1)).astype(np.int64)]
+        ground[cells] = h[s + (0.10 * (c - 1)).astype(np.int64)]
         top[cells] = h[s + (0.95 * (c - 1)).astype(np.int64)]
     ground = ground.reshape(C, C)
     top = top.reshape(C, C)
     vis = ~np.isnan(ground)
 
-    # Where is GROUND actually observed? A cell that only sees a wall or a
-    # vehicle side has a low percentile far above the surrounding ground.
-    # Low envelope = min over a 5x5 (2.5 m) neighbourhood; cells more than
-    # 0.35 m above it are object-covered: elevation unknown (NaN), and their
-    # obstacle height is measured from the envelope instead.
-    gpad = np.pad(np.where(vis, ground, np.inf), 2, constant_values=np.inf)
-    env = np.min(np.stack([gpad[2 + di:2 + di + C, 2 + dj:2 + dj + C]
-                           for di in range(-2, 3) for dj in range(-2, 3)]), axis=0)
+    # Where is GROUND actually observed? A cell that only sees an object's
+    # face has its low percentile ON the object. Neighbourhood ground = min
+    # over the 3x3 cells (0.5 m radius: slopes up to ~0.4 grade still pass);
+    # cells more than 0.15 m above it are object-covered -> elevation unknown.
+    # Obstacle height is measured from the lower of the cell's own ground and
+    # the neighbourhood ground (+5 cm), so a face-only cell still reads the
+    # object's full height (a 1.0 m box read 0.84 m without this).
+    gpad = np.pad(np.where(vis, ground, np.inf), 1, constant_values=np.inf)
+    env = np.min(np.stack([gpad[1 + di:1 + di + C, 1 + dj:1 + dj + C]
+                           for di in range(-1, 2) for dj in range(-1, 2)]), axis=0)
     env = np.where(np.isfinite(env), env, np.nan)
-    ground_seen = vis & ~(ground > env + 0.35)
-    base = np.where(ground_seen, ground, env)
+    ground_seen = vis & ~(ground > env + 0.15)
+    base = np.fmin(ground, env + 0.05)
     obs_h = np.where(vis, np.clip(top - base, 0.0, band_hi), 0.0).astype(np.float32)
     obs_h = np.nan_to_num(obs_h, nan=0.0)
     occ = vis & (obs_h >= step)
