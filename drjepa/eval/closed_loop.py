@@ -17,7 +17,6 @@ model measured 93 % and 80 % success on two runs.
 
 import argparse
 import json
-import math
 import multiprocessing as mp
 import os
 import time

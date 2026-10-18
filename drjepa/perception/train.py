@@ -29,7 +29,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from .dataset import FrameDataset
 from .model import GeoBEV, ModelConfig, count_params
 
-LOSS_W = {"vis": 1.0, "occ": 2.0, "obs_h": 1.0, "elev": 1.0, "grade": 1.0, "sand": 0.5}
+LOSS_W = {"vis": 1.0, "occ": 2.0, "obs_h": 1.0, "elev": 1.0, "grade": 1.0, "sand": 0.5, "depth": 0.5}
 
 
 def compute_losses(out, b, cells):
@@ -62,6 +62,11 @@ def compute_losses(out, b, cells):
         "sand": (F.binary_cross_entropy_with_logits(out["sand"], b["sand"], reduction="none")
                  * sim_m).sum() / smsum,
     }
+    if "depth_log" in out and "depth" in b:
+        d = b["depth"]
+        dv = ((d > 0.2) & (d < 60)).float()
+        err = (out["depth_log"] - torch.log(d.clamp(min=0.2))).abs()
+        parts["depth"] = (err * dv).sum() / dv.sum().clamp(min=1.0)
     total = sum(LOSS_W[k] * v for k, v in parts.items())
     return total, {k: float(v.detach()) for k, v in parts.items()}
 
@@ -151,6 +156,7 @@ def main():
     ap.add_argument("--real_share", type=float, default=0.15)
     ap.add_argument("--encoder", default="efficientnet_b0")
     ap.add_argument("--lift", default="geometric", choices=["geometric", "implicit"])
+    ap.add_argument("--depth_aux", action="store_true", help="training-only depth supervision")
     ap.add_argument("--input_w", type=int, default=512)
     ap.add_argument("--input_h", type=int, default=320)
     ap.add_argument("--epochs", type=int, default=10)
@@ -167,11 +173,12 @@ def main():
     torch.manual_seed(a.seed)
     np.random.seed(a.seed)
     dev = torch.device("cuda")
-    mcfg = ModelConfig(encoder=a.encoder, input_w=a.input_w, input_h=a.input_h, lift=a.lift)
+    mcfg = ModelConfig(encoder=a.encoder, input_w=a.input_w, input_h=a.input_h, lift=a.lift,
+                       depth_aux=a.depth_aux)
     sim_tr, sim_val = sim_split(a.sim)
     if a.max_sim_eps:
         sim_tr = sim_tr[:a.max_sim_eps]
-    train_ds = FrameDataset(sim_tr + list(a.real), mcfg, train=True)
+    train_ds = FrameDataset(sim_tr + list(a.real), mcfg, train=True, depth=a.depth_aux)
     val_sim = FrameDataset(sim_val, mcfg, train=False, stride=3)
     val_real = FrameDataset(a.val_real, mcfg, train=False) if a.val_real else None
     n_real = int(train_ds.is_real.sum())

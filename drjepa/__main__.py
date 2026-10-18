@@ -6,7 +6,8 @@
     eval-perception open-loop perception benchmark on labelled episodes
     eval-drive      closed-loop driving benchmark in the simulator
     export          export a checkpoint to ONNX (+ verify, + CPU latency)
-    demo            endless closed-loop demo with HUD video
+
+The endless driving demo is ./demo.py at the repo root.
 
 Run `python -m drjepa <command> -h` for each command's options.
 """
@@ -21,7 +22,6 @@ COMMANDS = {
     "eval-perception": "drjepa.eval.perception",
     "eval-drive": "drjepa.eval.closed_loop",
     "export": "drjepa.perception.export",
-    "demo": "drjepa.viz.demo",
 }
 
 

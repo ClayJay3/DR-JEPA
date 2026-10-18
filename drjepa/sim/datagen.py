@@ -50,6 +50,7 @@ def pack_labels(frames):
 def episode(ep):
     """Generate one episode; returns a small stats dict."""
     import cv2
+
     from .expert import ArcPlanner, NoiseInjector
     from .rover import RoverSim
 

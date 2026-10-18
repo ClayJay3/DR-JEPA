@@ -104,8 +104,10 @@ def _prop_arrays(sim):
     cache = getattr(sim, "_label_cache", None)
     if cache is None or cache[0] != key:
         ps = [p for p in sim.props if p.kind != "tuft"]
-        px = np.array([p.x for p in ps]); pz = np.array([p.z for p in ps])
-        pr = np.array([max(p.footprint, 1e-3) for p in ps]); ph = np.array([p.rigid_h for p in ps])
+        px = np.array([p.x for p in ps])
+        pz = np.array([p.z for p in ps])
+        pr = np.array([max(p.footprint, 1e-3) for p in ps])
+        ph = np.array([p.rigid_h for p in ps])
         cols = np.array([c for p in ps for c in p.colliders]).reshape(-1, 3)
         cache = (key, (px, pz, pr, ph, cols[:, 0], cols[:, 1], cols[:, 2]))
         sim._label_cache = cache
@@ -168,7 +170,7 @@ def depth_targets(depth, cam, R, t, grid: GridConfig, valid=None, step=0.25,
         ends = np.r_[starts[1:], len(idx)]
         cnt = ends - starts
         ok = cnt >= min_pts
-        s, e, c = starts[ok], ends[ok], cnt[ok]
+        s, c = starts[ok], cnt[ok]
         cells = idx[s]
         ground[cells] = h[s + (0.10 * (c - 1)).astype(np.int64)]
         top[cells] = h[s + (0.95 * (c - 1)).astype(np.int64)]

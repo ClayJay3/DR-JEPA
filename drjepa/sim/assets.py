@@ -85,7 +85,7 @@ def icosphere(subdiv=2):
     for _ in range(subdiv):
         cache, nf = {}, []
 
-        def mid(a, b):
+        def mid(a, b, cache=cache):
             key = (min(a, b), max(a, b))
             if key not in cache:
                 m = verts[a] + verts[b]

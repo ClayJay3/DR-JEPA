@@ -39,6 +39,9 @@ class ModelConfig:
     res: float = 0.5
     bev_ch: tuple = (96, 128, 192)    # U-Net widths at 48 / 24 / 12 cells
     pretrained: bool = True
+    depth_aux: bool = False           # training-only per-pixel depth head on the
+    #                                   encoder (BEVDepth-style supervision);
+    #                                   dropped at inference / export
     lift: str = "geometric"           # "geometric" (projection sampling) or
     #                                   "implicit" (the v12 design: pooled
     #                                   feature grid + camera vector + learned
@@ -243,6 +246,9 @@ class GeoBEV(nn.Module):
         self.register_buffer("mean", torch.tensor(self.MEAN).view(1, 3, 1, 1), persistent=False)
         self.register_buffer("std", torch.tensor(self.STD).view(1, 3, 1, 1), persistent=False)
         self.n_geo = 3
+        if cfg.depth_aux:
+            self.depth_head = nn.Sequential(nn.Conv2d(cfg.feat_ch, cfg.feat_ch, 3, 1, 1), nn.GELU(),
+                                            nn.Conv2d(cfg.feat_ch, 1, 1))
         if cfg.lift == "implicit":
             self.implicit = ImplicitLift(cfg.feat_ch, cfg.bev_ch[0], C)
             self.bev = BEVNet(cfg.bev_ch[0], cfg.bev_ch)
@@ -286,7 +292,8 @@ class GeoBEV(nn.Module):
         else:
             bev = self.lift(f, K, R, t, img.shape[-2:])
         out = self.bev(bev)
-        return {
+        extra = {"depth_log": self.depth_head(f)[:, 0]} if (self.cfg.depth_aux and self.training) else {}
+        return {**extra,
             "vis": out[:, 0], "occ": out[:, 1],
             "obs_h": F.softplus(out[:, 2]),
             "elev": 3.5 * torch.tanh(out[:, 3] / 3.5),

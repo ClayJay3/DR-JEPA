@@ -41,13 +41,14 @@ class FrameDataset(Dataset):
     fractional frame range ('path@0.0:0.8') for temporal train/val splits
     inside one long real recording."""
 
-    def __init__(self, specs, mcfg, train=True, stride=1, max_frames=None):
+    def __init__(self, specs, mcfg, train=True, stride=1, max_frames=None, depth=False):
         self.mcfg, self.train = mcfg, train
+        self.with_depth = depth         # auxiliary depth targets at feature resolution
         parsed = [parse_spec(s) for s in specs]
         self.dirs = [p for p, _ in parsed]
         self.meta = [load_episode_meta(d) for d in self.dirs]
         self.index = []
-        for e, (cam, dom, n, _) in enumerate(self.meta):
+        for e, (_, _, n, _) in enumerate(self.meta):
             a, b = parsed[e][1]
             ks = list(range(int(a * n), int(b * n), stride))
             if max_frames:
@@ -70,6 +71,8 @@ class FrameDataset(Dataset):
             # real recordings drop frames without a ground plane: label row
             # k is recording frame frame_ids[k]
             self._cache[e]["ids"] = z["frame_ids"] if "frame_ids" in z.files else None
+            dp = os.path.join(self.dirs[e], "depth.npy")
+            self._cache[e]["depth"] = np.load(dp, mmap_mode="r") if os.path.exists(dp) else None
         return self._cache[e]
 
     def __getitem__(self, i):
@@ -105,6 +108,7 @@ class FrameDataset(Dataset):
         img = cv2.resize(img, (Wi, Hi), interpolation=cv2.INTER_AREA)
         sx, sy = Wi / cw, Hi / ch
         K = np.array([[fx * sx, 0, (cx - x0) * sx], [0, fy * sy, (cy - y0) * sy], [0, 0, 1]])
+        dep = self._depth(e, fid, k, L, (W0, H0), (x0, y0, cw, ch)) if self.with_depth else None
         if self.train:
             if rng.random() < 0.5:                          # horizontal mirror
                 img = img[:, ::-1]
@@ -112,7 +116,11 @@ class FrameDataset(Dataset):
                 R = FLIP @ R @ FLIP
                 t = FLIP @ t
                 y = {kk: v[::-1].copy() for kk, v in y.items()}
+                if dep is not None:
+                    dep = dep[:, ::-1].copy()
             img = self._photometric(np.ascontiguousarray(img), rng)
+        if dep is not None:
+            y["depth"] = dep
         out = {"img": torch.from_numpy(np.ascontiguousarray(img)).permute(2, 0, 1),
                "K": torch.tensor(K, dtype=torch.float32),
                "R": torch.tensor(R, dtype=torch.float32),
@@ -120,6 +128,24 @@ class FrameDataset(Dataset):
                "is_real": torch.tensor(float(dom == "real"))}
         out.update({kk: torch.from_numpy(np.ascontiguousarray(v)) for kk, v in y.items()})
         return out
+
+    def _depth(self, e, fid, k, L, wh0, crop):
+        """Depth target (Hi/8, Wi/8) in metres for the same crop (0 = none)."""
+        W0, H0 = wh0
+        x0, y0, cw, ch = crop
+        if L["depth"] is not None:                          # sim: (N, H/4, W/4)
+            d = np.asarray(L["depth"][k], np.float32)
+        else:                                               # real: stereo png + confidence
+            d = cv2.imread(os.path.join(self.dirs[e], "depth", f"{fid:05d}.png"), -1)
+            if d is None:
+                return np.zeros((self.mcfg.input_h // 8, self.mcfg.input_w // 8), np.float32)
+            d = d.astype(np.float32) / 1000.0
+            cf = cv2.imread(os.path.join(self.dirs[e], "conf", f"{fid:05d}.png"), -1)
+            d[(cf >= 40) | (d < 0.3) | (d > 20.0)] = 0.0
+        sx, sy = d.shape[1] / W0, d.shape[0] / H0
+        d = d[int(y0 * sy):int((y0 + ch) * sy), int(x0 * sx):int((x0 + cw) * sx)]
+        return cv2.resize(d, (self.mcfg.input_w // 8, self.mcfg.input_h // 8),
+                          interpolation=cv2.INTER_NEAREST)
 
     @staticmethod
     def _photometric(img, rng):

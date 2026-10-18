@@ -288,7 +288,7 @@ class GLRenderer:
         self._set(self.p_sh_terrain, "u_center", c2)
         self.va_sh_terrain.render()
         self._set(self.p_sh_obj, "u_vp", lvp)
-        for va, vs, n, double in self.groups:
+        for _, vs, n, _ in self.groups:
             vs.render(instances=n)
         if self.rover is not None and rover_model is not None:
             inst = np.zeros(self.INST_FLOATS, np.float32)
@@ -317,7 +317,7 @@ class GLRenderer:
         # never depends on triangle winding (which mirrors with handedness)
         ctx.disable(mgl.CULL_FACE)
         self.va_terrain.render()
-        for va, vs, n, double in self.groups:
+        for va, _, n, _ in self.groups:
             va.render(instances=n)
 
         # ---- resolve (supersample + tone map + GT depth/class) ----
