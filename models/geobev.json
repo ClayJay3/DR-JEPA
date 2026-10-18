@@ -1,0 +1,61 @@
+{
+ "format": "drjepa-geobev-v1",
+ "onnx": "geobev.onnx",
+ "input": {
+  "width": 512,
+  "height": 320,
+  "layout": "NCHW RGB float [0,1]",
+  "K": "intrinsics at the input size, pixel-edge convention (u spans [u, u+1))",
+  "R": "camera->robot rotation; camera axes x right, y down, z forward",
+  "t": "camera position in the robot frame (m): robot frame x right, y up, z forward, origin on the ground under the robot"
+ },
+ "grid": {
+  "cells": 48,
+  "res_m": 0.5,
+  "x_range_m": [
+   -12.0,
+   12.0
+  ],
+  "z_range_m": [
+   0.0,
+   24.0
+  ],
+  "index": "[i = x, j = z]"
+ },
+ "outputs": {
+  "occ_logit": "obstacle (rigid height >= step) logit; trained with pos_weight 3",
+  "vis_logit": "cell observed by the camera, logit",
+  "obs_h": "rigid obstacle height above terrain (m)",
+  "elev": "terrain elevation relative to the ground under the robot (m)",
+  "grade": "terrain slope magnitude (rise/run)",
+  "sand_logit": "soft ground, logit"
+ },
+ "model_cfg": {
+  "encoder": "efficientnet_b0",
+  "input_w": 512,
+  "input_h": 320,
+  "feat_ch": 64,
+  "heights": [
+   -2.0,
+   -1.0,
+   -0.4,
+   0.0,
+   0.3,
+   0.7,
+   1.2,
+   2.0
+  ],
+  "cells": 48,
+  "res": 0.5,
+  "bev_ch": [
+   96,
+   128,
+   192
+  ],
+  "pretrained": false,
+  "depth_aux": true,
+  "lift": "geometric"
+ },
+ "trained_epoch": 10,
+ "ort_graph_optimization": "all"
+}

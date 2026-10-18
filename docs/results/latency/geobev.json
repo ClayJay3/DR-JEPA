@@ -1,0 +1,43 @@
+{
+ "image": [
+  720,
+  1280,
+  3
+ ],
+ "torch_device": "NVIDIA GeForce RTX 4080 SUPER",
+ "torch_network": {
+  "median_ms": 3.002442535944283,
+  "p95_ms": 3.04780884180218
+ },
+ "torch_call": {
+  "median_ms": 4.521056078374386,
+  "p95_ms": 4.66763130389154
+ },
+ "torch_nav_step": {
+  "median_ms": 5.919798044487834,
+  "p95_ms": 11.848267132882029
+ },
+ "torch_nav_stage_mean_ms": {
+  "pose": 0.008725213507811228,
+  "perception": 4.647620158114781,
+  "fusion": 0.9721134983313581,
+  "planning": 1.9783089224559565,
+  "control": 0.18964563263580203
+ },
+ "onnx_cpu_default_threads_call": {
+  "median_ms": 25.802856544032693,
+  "p95_ms": 43.14102275529876
+ },
+ "onnx_cpu_4t_call": {
+  "median_ms": 20.638242596760392,
+  "p95_ms": 20.939641178119928
+ },
+ "onnx_cpu_4t_nav_step": {
+  "median_ms": 22.351895924657583,
+  "p95_ms": 28.566762222908437
+ },
+ "onnx_cpu_1t_call": {
+  "median_ms": 58.13954886980355,
+  "p95_ms": 58.37226246949285
+ }
+}
