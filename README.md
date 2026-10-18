@@ -23,11 +23,15 @@ profile (footprint, step height, slope limits) decides what is blocking.
 
 | | |
 |---|---|
-| perception network | **4.5 M parameters**, one ONNX file with the camera as an input |
-| latency (perception) | **~3 ms** RTX 4080 · **29 ms** CPU, 4 threads · 68 ms CPU, 1 thread |
-| full control step | ~8 ms (perception + fusion + A\* + control) |
-| closed loop, 144 unseen worlds, random camera rigs | **93.8 % success** (privileged expert 97.2 %) |
+| perception network | **4.5 M parameters**, one 18 MB ONNX file with the camera as an input |
+| latency (perception) | **3 ms** RTX 4080 · **19 ms** CPU, 4 threads · 57 ms CPU, 1 thread |
+| full control step (perception + map + A\* + control) | **6 ms** RTX 4080 · **22 ms** CPU only (ONNX, 4 threads) |
+| closed loop, 144 unseen worlds, random camera rigs | **93.8 % success** (perfect perception, same stack: 94.4 %) |
+| held-out real site (Hanksville, ZED 2i stereo truth) | obstacle AUC **0.95** at 0-6 m (a large monocular depth model: 0.70) |
 
+There are two trained models (`runs/`, not tracked by git): `geobev`
+(EfficientNet-B0, distilled; the default) and `geobev_dino` (frozen DINOv3
+ViT-S, 25 M parameters, 6 ms on a GPU; the most accurate on real terrain).
 Results, methodology and the honest gaps are in
 [docs/benchmarks.md](docs/benchmarks.md); why it is built this way (and what
 was tried and measured worse) is in [docs/design.md](docs/design.md).
@@ -60,15 +64,18 @@ flowchart LR
    and a top-down U-Net predicts six channels per cell.
 2. **Remember** — `drjepa/nav/mapping.py`. Prior-corrected log-odds
    occupancy with asymmetric positive evidence, decay and caps (each rule
-   measured necessary), plus range-weighted means for elevation and slope.
+   measured necessary), plus range-weighted means for elevation and a
+   slope vector (so slope limits depend on the direction of travel).
    Visual-odometry scan matching nudges the pose filter.
 3. **Plan** — `drjepa/nav/planning.py`. Weighted A* on a costmap from
    occupancy, distance-transform inflation, slope and sand, with a
    plan-consistency prior and deadlock-free fallbacks.
-4. **Act** — `drjepa/nav/control.py`. 17 constant-curvature arcs scored on
-   progress, clearance (fused map + zero-lag fresh-frame guard), alignment
-   and smoothness; creep, map-checked reverse and escape behaviours; speed
-   governed by clearance, curvature, goal distance and gap width.
+4. **Act** — `drjepa/nav/control.py`. 17 constant-curvature arcs checked
+   for clearance (fused map + zero-lag fresh-frame guard) and for side-slope,
+   downhill and climb limits along their own heading, then scored on
+   progress, clearance, alignment and smoothness; creep, map-checked
+   reverse and escape behaviours; speed governed by clearance, curvature,
+   goal distance and gap width.
 
 ---
 
@@ -116,6 +123,13 @@ python -m drjepa export --checkpoint runs/geobev/best.pt --out geobev.onnx --ver
 
 The `.json` manifest next to the `.onnx` documents the I/O contract, so a
 C++ or Rust runtime needs no Python (see `drjepa/perception/export.py`).
+On a CPU, pin the thread count -- ONNX Runtime's one-thread-per-core
+default measured slower with a long latency tail:
+
+```python
+from drjepa.perception.onnx_runtime import OnnxPerceiver
+nav = Navigator(OnnxPerceiver("geobev.onnx", threads=4), camera=camera, robot=robot)
+```
 
 ---
 
@@ -124,15 +138,18 @@ C++ or Rust runtime needs no Python (see `drjepa/perception/export.py`).
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[sim,export,dev]"        # + ".[teacher]" for the depth teacher / DINOv3
-pytest                                    # 23 tests, ~1 min
+pytest                                    # 25 tests, ~1 min
 
 python demo.py --checkpoint runs/geobev/best.pt --camera zed            # endless drive + HUD video
 python dashboard.py --checkpoint runs/geobev/best.pt --scenario camp    # diagnostics dashboard
 python dashboard.py --checkpoint runs/geobev/best.pt \
-    --replay "recordings/zed/ZED_2i_31237348_(1)"                       # replay a real recording
+    --replay "recordings/zed/ZED_2i_39163798_(1)"                       # replay a real recording
 ```
 
-The dashboard shows the camera with predicted obstacles, route and arcs
+![real replay](docs/images/dashboard_real.jpg)
+
+The dashboard (above: a held-out real ZED recording; top of the page: the
+simulator) shows the camera with predicted obstacles, route and arcs
 projected back into the image; all six perception heads; ground truth with
 hit / false-alarm / miss and error maps (exact in sim, stereo on real
 recordings); the fused belief map with every candidate arc scored; live
@@ -152,11 +169,18 @@ python -m drjepa gen --out data/sim --episodes 2000 --workers 24 --stride 3 --au
 ./tools/zed/run.sh --svo recordings/svo/*.svo2 --output recordings/zed --hz 1   # SDK in Docker
 python -m drjepa label-zed "recordings/zed/*"     # levelled poses + stereo grid labels
 
-# 3. train (sim + real mixed; real-share 15 %)
+# 3a. teacher / accuracy model: frozen DINOv3 encoder (sim + 15 % real)
+REAL="recordings/zed/ZED_2i_31237348@0:0.85 recordings/zed/ZED_2i_39163798@0:0.85"
+VAL="recordings/zed/ZED_2i_31237348@0.85:1 recordings/zed/ZED_2i_39163798@0.85:1"
+python -m drjepa train --sim data/sim --encoder dinov3_vits16 --depth_aux \
+    --grade_q 0.7 --grade_steep_w 4 --real $REAL --val_real $VAL --out runs/geobev_dino
+
+# 3b. deployable model: EfficientNet-B0 distilled from the teacher
+#     (+ unlabeled real video: features and outputs only, no labels needed)
 python -m drjepa train --sim data/sim --encoder efficientnet_b0 --depth_aux \
-    --real "recordings/zed/ZED_2i_31237348@0:0.85" "recordings/zed/ZED_2i_39163798@0:0.85" \
-    --val_real "recordings/zed/ZED_2i_31237348@0.85:1" "recordings/zed/ZED_2i_39163798@0.85:1" \
-    --out runs/geobev
+    --grade_q 0.7 --grade_steep_w 4 --real $REAL --val_real $VAL --real_share 0.3 \
+    --teacher runs/geobev_dino/best.pt --init_head_from_teacher \
+    --unlabeled recordings/phone/rec2 recordings/phone/rec3 --out runs/geobev
 
 # 4. evaluate + export
 ./tools/run_benchmarks.sh runs/geobev/best.pt bench/geobev
@@ -186,15 +210,19 @@ off by up to 30 deg on long recordings).
 Measured, not hypothetical (details in [docs/benchmarks.md](docs/benchmarks.md)):
 
 - **Real terrain needs more real data.** Both labelled real recordings are
-  flat dirt lots. On the held-out Hanksville site the trained models detect
-  obstacles better than a large depth model, but read gently rising ground as
-  flat. The frozen-DINOv3 model and the distilled small model cut that error
-  roughly in half; more varied real terrain (any ZED 2i drive through
+  flat dirt lots. On the held-out Hanksville site every trained model
+  detects obstacles better than a large depth model, but the small model
+  reads gently rising desert as flatter than it is (0.27 m elevation error
+  near, vs 0.11 m for the frozen-DINOv3 model and 0.35 m before
+  distillation). More varied real terrain (any ZED 2i drive through
   `tools/zed` + `label-zed`) is the direct fix.
-- **Slopes are the main sim failure.** Every simulated tip-over happened on
-  ground the map had observed, believed gentler than it was. The slope loss
-  (`--grade_q 0.7 --grade_steep_w 4`) more than doubles steep-ground recall at
-  the planner's lethal threshold.
+- **Slopes are the main sim failure.** Every simulated tip-over is a
+  roll-over on ground the map believed gentler than it was. The slope loss
+  (`--grade_q 0.7 --grade_steep_w 4`) triples steep-ground recall at the
+  lethal threshold, and arcs, creep and reverse are checked against
+  side-slope limits in their own direction of travel. Still, 6 % of
+  random-rig episodes end in a tip, 15 % with a 0.4 m ZED camera, where
+  slopes are seen at a grazing angle (perfect perception: 4 % / 6 %).
 - **Pose quality bounds contacts.** With perfect perception the stack still
   grazes ~3x more often than the privileged expert, because a GPS-filtered pose
   wanders ~1-1.7 m and smears the map. Feed VIO / EKF pose (`"x"`, `"z"`) when

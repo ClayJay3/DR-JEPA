@@ -76,11 +76,22 @@ a bigger rover. One trained model serves robots with different clearances.
   the inflation penalty and the planner threads corridors. A stronger
   path-commitment family reached mission parity with -23 % contacts but
   paths a few percent longer; path efficiency won.
+- **Direction-aware slope limits**: every sim tip-over was a roll-over, so
+  an isotropic "grade too steep" test is the wrong question. The map fuses
+  a slope vector and arcs are checked for side slope, downhill and climb
+  grade in their own direction of travel (94.4 % / 4.9 % tips vs 93.1 % /
+  6.2 %).
 - **Creep mode**: in tight gaps the arc check rejects everything while A*
   correctly says the corridor is passable; creeping along the route beats
-  thrashing into recovery.
+  thrashing into recovery. Creep picks the slope-safe arc nearest the route
+  (6 of 10 low-camera tip-overs were creeping onto believed-steep ground).
+  Making creep *reverse* away from steep ground instead measured worse: the
+  robot backed onto ground the forward camera had never seen (3 new tips,
+  none fixed).
 - **Map-checked reverse**: the map remembers what is behind; a blind
-  fixed-length reverse backed into obstacles it had already seen.
+  fixed-length reverse backed into obstacles it had already seen. It also
+  stops on believed-steep ground behind (the chassis keeps its heading, so
+  the same roll / downhill limits apply).
 - **No sand brake**: better sand detection plus a throttle governor
   quadrupled stalls -- in soft ground momentum is what gets you through.
 
@@ -102,6 +113,14 @@ a bigger rover. One trained model serves robots with different clearances.
   metric, MoGe-2: AbsRel 2-8 raw, the ground placed 4-6x too far). Aligning
   relative depth to the robot's own ground plane makes it excellent near
   (AbsRel 0.04 at 0.5-3 m) -- that is the offline teacher.
+- **Frozen foundation features transfer; distill them into the small
+  model.** A frozen DINOv3 ViT-S encoder reads real terrain 2-3x better
+  than a fine-tuned EfficientNet-B0 trained on the same data (Hanksville
+  elevation 0.08 vs 0.20-0.35 m near) but is 25 M parameters. Training the
+  B0 network against the DINOv3 model's BEV features and outputs -- on
+  labelled frames *and* unlabeled real video -- closes most of the obstacle
+  and rear-terrain gap at 4.5 M parameters; slope is excluded from the
+  distillation (the exact sim slope labels beat the teacher's estimate).
 - **Never train real-only** (v12): a few cluttered yard recordings labelled
   75 % of visible cells as obstacles and the model learned "everything is
   red". Mix sim and real.
@@ -110,7 +129,10 @@ a bigger rover. One trained model serves robots with different clearances.
 
 - **n = 30 lies.** The same model measured 93.3 % / 3.3 % tips and
   80.0 % / 12.5 % tips on two 30-episode runs. Use >= 120 episodes; contacts
-  are heavy-tailed and need even more.
+  are heavy-tailed and need even more: switching inference from fp16 to
+  fp32 (outputs change by <= 0.004) moved mean contacts per episode from
+  0.85 to 1.4 through two or three chaotic episodes. Compare changes on the
+  same seeds, episode by episode (which tips were fixed, which are new).
 - **Rank detection, not pos-weighted losses.** Pos-weighted BCE rises as a
   head gets better at rare positives; checkpoint selection uses average
   precision.

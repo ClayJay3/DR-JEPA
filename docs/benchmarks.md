@@ -12,6 +12,19 @@ episodes: on 30-episode runs the same model measured both 93 % and 80 %
 success. Real-world results use ZED 2i recordings from a site the networks
 never trained on (Hanksville, UT), scored against stereo depth.
 
+**Models.** Every network is GeoBEV (geometric lift + top-down U-Net); they
+differ in encoder and training recipe. Two ship:
+
+| id | encoder | training recipe | parameters |
+|---|---|---|---:|
+| A | EfficientNet-B0 (stride 8) | sim + real (15 %) | 4.5 M |
+| B | EfficientNet-B0 | A with the v12-style implicit lift | 6.2 M |
+| C | EfficientNet-B0 | A + training-only depth head | 4.5 M |
+| A2 | EfficientNet-B0 | C + steep-weighted slope loss | 4.5 M |
+| **F -- default, `runs/geobev`** | EfficientNet-B0 | A2 + distilled from D (features + outputs), real share 30 %, unlabeled phone video | **4.5 M** |
+| D | DINOv3 ViT-S/16, frozen | C recipe | 25.3 M (21.7 M frozen) |
+| **D2 -- accuracy, `runs/geobev_dino`** | DINOv3 ViT-S/16, frozen | D + steep-weighted slope loss | 25.3 M |
+
 ---
 
 ## 1. Closed-loop driving (simulator)
@@ -19,16 +32,25 @@ never trained on (Hanksville, UT), scored against stereo depth.
 | policy | success | tipped | contacts / ep | collision-free | SPL |
 |---|---:|---:|---:|---:|---:|
 | privileged expert (true map) | 97.2 % | 1.4 % | 0.38 | 91.7 % | 0.909 |
-| **GeoBEV (geometric lift)** | **93.8 %** | 6.2 % | 0.93 | 77.1 % | 0.824 |
-| GeoBEV with the v12-style implicit lift | 94.4 % | 4.2 % | 0.82 | 77.1 % | 0.834 |
+| perfect perception through the same map / planner / controller | 94.4 % | 4.2 % | 1.16 | 71.5 % | 0.862 |
+| **F: GeoBEV-B0, distilled (default)** | 93.8 % | 6.2 % | 1.42 | 77.1 % | 0.814 |
+| A2: GeoBEV-B0, not distilled | 94.4 % | 5.6 % | 0.90 | 81.9 % | 0.828 |
+| D2: GeoBEV-DINOv3 (accuracy model) | 93.1 % | 5.6 % | 1.07 | 75.0 % | 0.809 |
 | *v12 legacy model, in the v12 simulator* | *79.9 %* | *14.6 %* | *2.31* | *58.3 %* | *0.630* |
 
-SPL = success weighted by straight-line / driven distance. The v12 row is
-the previous shipping model on the previous simulator (same protocol, same
-seeds); its own expert scored 98.6 % there, so both worlds are equally
-solvable.
+SPL = success weighted by straight-line / driven distance. One episode is
+0.7 points, so the three GeoBEV rows are statistically tied -- and tied
+with *perfect* perception through the same stack: on random rigs, sim
+success is limited by navigation and pose, not perception (tips are the
+exception: 5.6-6.2 % vs 4.2 %). Contacts are heavy-tailed (two or three
+episodes with 15-35 grazes move the mean by 0.5) and limited by the GPS
+pose, which wanders 1-2 m. F is the default because it is the best small
+model on *real* data (section 2), not because it drives the simulator
+best. The v12 row is the previous shipping model on the previous simulator
+(same protocol, same seeds); its own expert scored 98.6 % there, so both
+worlds are equally solvable.
 
-`python -m drjepa eval-drive --policy model --checkpoint runs/A_geo_b0/best.pt --episodes 144`
+`python -m drjepa eval-drive --policy model --checkpoint runs/geobev/best.pt --episodes 144`
 
 ### Cross-domain: a world that looks different
 
@@ -47,19 +69,22 @@ that merely looks different it hits obstacles 20x as often (wall worlds:
 48.6 % success, 28 contacts per episode). Any real camera looks different
 from any simulator, so this is the generalization that matters.
 
-### Pinned camera rigs (model A, same 144 worlds)
+### Pinned camera rigs (model F, same 144 worlds)
 
 | rig | success | tipped | contacts / ep | stalls / ep | SPL |
 |---|---:|---:|---:|---:|---:|
-| random per episode | 93.8 % | 6.2 % | 0.93 | 0.04 | 0.824 |
-| ZED 2i: 0.40 m, 101.5 deg, level | 86.1 % | 9.7 % | 0.97 | 2.08 | 0.763 |
-| phone: 1.4 m, 66 deg, pitch -8 | 86.8 % | 13.2 % | 0.55 | 0.22 | 0.782 |
-| low-wide: 0.30 m, 120 deg, pitch -5 | 86.1 % | 13.9 % | 1.20 | 0.04 | 0.756 |
-| mast: 2.0 m, 70 deg, pitch -15 | 86.1 % | 13.2 % | 0.58 | 0.15 | 0.780 |
-| rolled: 0.8 m, 90 deg, roll +6 | 88.2 % | 11.1 % | 0.51 | 0.65 | 0.783 |
+| random per episode | 93.8 % | 6.2 % | 1.42 | 0.00 | 0.814 |
+| phone: 1.4 m, 66 deg, pitch -8 | 91.0 % | 9.0 % | 0.33 | 0.05 | 0.798 |
+| mast: 2.0 m, 70 deg, pitch -15 | 91.0 % | 9.0 % | 0.37 | 0.35 | 0.808 |
+| rolled: 0.8 m, 90 deg, roll +6 | 88.9 % | 11.1 % | 0.39 | 0.30 | 0.779 |
+| low-wide: 0.30 m, 120 deg, pitch -5 | 87.5 % | 11.8 % | 1.17 | 0.00 | 0.740 |
+| ZED 2i: 0.40 m, 101.5 deg, level | 84.7 % | 14.6 % | 0.85 | 0.08 | 0.747 |
 
-Every rig drives; the losses are almost entirely tip-overs, which is what
-section 1b is about.
+Every rig drives (mean 88.6 %, model A: 86.7 %); the losses are almost
+entirely tip-overs, and they grow as the camera gets lower: at 0.3-0.4 m
+the ground ahead is seen at a grazing angle, which is where slope is
+hardest to read. With perfect perception the ZED rig reaches 92.4 % /
+5.6 % tips, so the low-camera gap is perception: slope read from 0.4 m.
 
 ### 1b. Why the robot tips: slopes believed too gentle
 
@@ -71,7 +96,10 @@ episodes (cells with true grade > 0.45 within 12 m):
 | grade head | steep AUC | recall at the lethal threshold (0.46) | bias on steep cells | flat cells flagged |
 |---|---:|---:|---:|---:|
 | A: L1 regression | 0.90 | 20 % | -0.22 | 0.00 % |
-| A2: steep-weighted pinball (q 0.7, w 4) | -- | **60 %** | -- | 0.31 % |
+| A2: steep-weighted pinball (q 0.7, w 4) | **0.96** | **60 %** | **-0.08** | 0.31 % |
+| F: A2 + distillation (default) | **0.96** | 54 % | -0.10 | 0.14 % |
+| D: frozen DINOv3, L1 | 0.90 | 14 % | -0.23 | 0.00 % |
+| D2: frozen DINOv3, steep-weighted pinball | 0.95 | 50 % | -0.11 | 0.23 % |
 
 The network *ranks* slopes well but regression shrinks rare steep cells
 toward the flat majority. Weighting steep cells and penalizing
@@ -79,6 +107,38 @@ under-estimation (it tips you; over-estimation costs a detour) triples
 recall at the planner's threshold for a 0.3 % false-alarm rate on flat
 ground. Lowering the threshold on the unfixed model instead (0.35: 50 %
 recall) flags a quarter of drivable 0.30-0.45 slopes as lethal.
+
+**Every remaining tip is a roll-over.** With the A2 head, all nine tips
+had a side-slope of 0.51-0.58 (limit 0.50) while pitch stayed moderate, and
+seven of nine happened in plain drive mode. Robots tip sideways long before
+they tip forward, so the map now fuses a slope *vector* (magnitude from the
+grade head, direction from the gradient of the elevation head -- median 9
+deg direction error on steep sim cells) and every candidate arc is checked
+against side-slope, downhill and climb limits in the direction it travels:
+
+| model A2, same 144 worlds | success | tipped | stalls / ep | SPL |
+|---|---:|---:|---:|---:|
+| isotropic grade check (0.45) | 93.1 % | 6.2 % | 0.28 | 0.813 |
+| + creep refuses believed-steep arcs (reverses instead) | 91.0 % | 8.3 % | 0.25 | 0.791 |
+| **direction-aware check, side slope 0.40** | **94.4 %** | **4.9 %** | 0.25 | **0.829** |
+| direction-aware check, side slope 0.35 | 91.7 % | 6.9 % | 0.50 | 0.805 |
+
+The creep rule fixed none of the original tips and added three, all while
+reversing onto ground the forward camera had never seen; it was reverted.
+The direction-aware check fixed two tips and added none. The seven that
+remain are perception: the map believed 0.16-0.49 where the truth was
+0.52-0.73.
+
+On the low ZED rig, 6 of 10 analysed tips came while *creeping* (the arc
+check had rejected everything and creep followed the route regardless),
+one while backing down a believed-steep slope. Creep now takes the
+slope-safe arc nearest the route, and the map-checked reverse also stops on
+believed-steep ground (model F, same seeds and precision):
+
+| | random rigs | ZED rig |
+|---|---:|---:|
+| creep follows the route regardless | 91.7 % / 6.9 % tips | 83.3 % / 15.3 % tips |
+| **creep on slope-safe arcs + reverse stops on steep ground** | **93.8 % / 6.2 %** | **84.7 % / 14.6 %** |
 
 ---
 
@@ -92,18 +152,31 @@ observed.
 
 | method | obstacles AUC (0-6 / 6-12 m) | best F1 (0-6 / 6-12 m) | elevation MAE, front (0-6 / 6-12 / 12-24 m) | elevation MAE, rear (0-6 / 6-12 m) |
 |---|---|---|---|---|
-| GeoBEV geometric (A) | **0.92** / 0.64 | **0.39** / 0.31 | 0.20 / 0.33 / 0.33 | 0.22 / 0.46 |
-| GeoBEV implicit (B) | 0.82 / **0.78** | 0.32 / 0.32 | 0.12 / 0.41 / 0.60 | 0.17 / 0.50 |
-| depth teacher (DA-V2-B + mount plane, no training) | 0.70 / 0.45 | 0.33 / 0.18 | **0.03 / 0.11 / 0.25** | **0.04 / 0.17** |
+| A: GeoBEV-B0 | 0.92 / 0.64 | 0.39 / 0.31 | 0.20 / 0.33 / 0.33 | 0.22 / 0.46 |
+| B: implicit lift | 0.82 / 0.78 | 0.32 / 0.32 | 0.12 / 0.41 / 0.60 | 0.17 / 0.50 |
+| C: + depth head | 0.91 / 0.65 | 0.41 / 0.27 | 0.34 / 0.45 / 0.47 | 0.14 / 0.32 |
+| A2: + slope loss | 0.94 / 0.72 | 0.46 / 0.27 | 0.35 / 0.44 / 0.47 | 0.17 / 0.39 |
+| **F: + distillation (default, 4.5 M)** | 0.95 / 0.77 | 0.56 / 0.35 | 0.27 / 0.34 / **0.27** | 0.11 / 0.23 |
+| D: frozen DINOv3 | **0.97** / 0.76 | **0.58** / 0.34 | 0.08 / 0.22 / 0.39 | 0.10 / 0.18 |
+| **D2: frozen DINOv3 + slope loss (accuracy)** | 0.96 / **0.84** | 0.56 / **0.36** | 0.11 / 0.28 / 0.42 | 0.10 / 0.20 |
+| depth teacher (DA-V2-B + mount plane, no training) | 0.70 / 0.45 | 0.33 / 0.18 | **0.03 / 0.11** / 0.25 | **0.03 / 0.17** |
 
 Obstacle columns are from the rear (camp) recording; the front recording is
-open desert with 0.5 % obstacle cells, too few to score. **The trained
-networks see real obstacles better than the depth model, but their real
-terrain elevation is 4-6x worse**: a systematic, range-growing under-
-estimate (-0.10 m near, about -2.3 cm per metre of range) on terrain that
-rises gently away from the rover. Both real training recordings are flat
-dirt lots, so "real ground is flat" is a learnable shortcut; more varied
-real terrain is the fix.
+open desert with 0.5 % obstacle cells, too few to score.
+
+- **Every trained network sees real obstacles better than the depth model**
+  (AUC 0.92-0.97 vs 0.70 near).
+- **Frozen DINOv3 features are what transfer real terrain.** The B0 models
+  trained on sim + two flat real lots read gently rising desert as flat
+  (front elevation 0.20-0.35 m near: a range-growing under-estimate of
+  about -2.3 cm per metre); the frozen DINOv3 encoder cuts that to
+  0.08-0.11 m.
+- **Distillation moves the small model most of the way.** F is A2's network
+  trained against D's features and outputs (plus a larger real share and
+  unlabeled phone video): obstacle F1 0.46 -> 0.56 (the teacher's 0.58),
+  rear elevation 0.17 / 0.39 -> 0.11 / 0.23 m (teacher 0.10 / 0.18), front
+  elevation 0.35 -> 0.27 m near. The front-terrain gap to DINOv3 is the
+  largest one left; more varied real terrain is the direct fix.
 
 `python -m drjepa eval-perception --checkpoint X --episodes "recordings/zed/ZED_2i_31237348_(1)" "recordings/zed/ZED_2i_39163798_(1)"`
 
@@ -162,13 +235,22 @@ linear probe on DINOv3 features. Real data, not photorealism, is the lever.
 
 ## 6. Latency
 
-| stage | RTX 4080 | CPU (ONNX Runtime) |
-|---|---:|---:|
-| perception (GeoBEV-B0, 512 x 320 input) | see note | 29 ms (4 threads), 68 ms (1 thread) |
-| belief-map fusion | 1.1 ms | 1.1 ms |
-| A* planning (every 3rd step, amortized) | 2.8 ms | 2.8 ms |
-| arc control | 0.3 ms | 0.3 ms |
+Isolated, one frame at a time, 1280 x 720 input resized to 512 x 320.
+Ryzen 9 7950X for CPU numbers.
 
-GPU perception latency measured during evaluation (shared GPU): ~20 ms with
-8 concurrent simulator workers; isolated timing is in section 7 once
-measured.
+| stage | GPU (RTX 4080, PyTorch fp32) | CPU (ONNX Runtime) |
+|---|---:|---:|
+| perception, GeoBEV-B0 (F) -- network only | 3.0 ms | 18.7 ms (4 threads), 57 ms (1 thread) |
+| perception, GeoBEV-B0 (F) -- per call, incl. resize + copies | 4.5 ms | 20.5 ms (4 threads), 59 ms (1 thread) |
+| perception, GeoBEV-DINOv3 (D2) -- per call | 6.3 ms | 70 ms (16 threads), 93 ms (4), 312 ms (1) |
+| belief-map fusion | 1.0 ms | 1.0 ms |
+| A* planning (every 3rd step, amortized) | 1.6 ms | 1.6 ms |
+| arc control | 0.2 ms | 0.2 ms |
+| **full `Navigator.step`, median (p95)** | **6.0 ms (11.5 ms)** | **22 ms (28 ms)**, 4 threads |
+
+fp16 autocast is *slower* at batch 1 on this GPU (B0 5.9 ms, DINOv3 7.6 ms
+per call), so `Perceiver` defaults to fp32; for embedded fp16 / int8 use
+the ONNX file with TensorRT. ONNX vs PyTorch outputs agree to 4e-5 (B0)
+and 5e-5 (DINOv3). For the small model on CPU pass `threads=4` to
+`OnnxPerceiver`: ONNX Runtime's default (one thread per core) is slower
+(23 ms) with a long tail (step p95 51 ms).

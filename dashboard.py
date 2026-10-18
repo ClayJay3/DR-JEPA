@@ -76,8 +76,11 @@ def run_replay(a, writer_fn):
         heading = math.degrees(math.atan2(fwd[0], -fwd[2])) % 360
         j = int(np.searchsorted(along, along[k] + 30.0))
         goal = pos[min(j, len(pos) - 1)]
-        if np.linalg.norm(goal - pos[k]) < 5:
-            goal = pos[k] + 30 * np.array([math.sin(math.radians(heading)), math.cos(math.radians(heading))])
+        ahead = np.array([math.sin(math.radians(heading)), math.cos(math.radians(heading))])
+        # the recorded track can run behind the camera (a rear-facing
+        # camera): then aim straight ahead of the camera instead
+        if np.linalg.norm(goal - pos[k]) < 5 or np.dot(goal - pos[k], ahead) < 0:
+            goal = pos[k] + 30 * ahead
         dt = max(tt[k] - tt[k - 1], 1e-3) if k else 1.0
         speed = float(np.linalg.norm(pos[k] - pos[k - 1]) / dt) if k else 0.0
         s = {"x": pos[k, 0], "z": pos[k, 1], "heading": heading, "speed": speed,
