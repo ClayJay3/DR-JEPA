@@ -105,6 +105,7 @@ class Navigator:
         self.controller.reset()
         self.pose_filter.reset()
         self.step_i = 0
+        self.last_timing = {}
         self.grids = None
         self.pose = None
         self.goal = None
@@ -133,8 +134,9 @@ class Navigator:
         t4 = time.perf_counter()
         thr, st = self.controller.step(self.map, self.planner, pose, heading, goal, sensors["speed"])
         t5 = time.perf_counter()
-        for k, v in (("pose", t1 - t0), ("perception", t2 - t1), ("fusion", t3 - t2),
-                     ("planning", t4 - t3), ("control", t5 - t4)):
+        self.last_timing = {"pose": t1 - t0, "perception": t2 - t1, "fusion": t3 - t2,
+                            "planning": t4 - t3, "control": t5 - t4}
+        for k, v in self.last_timing.items():
             self.timing[k] += v
         self.timing["steps"] += 1
         self.step_i += 1

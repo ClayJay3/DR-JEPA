@@ -56,6 +56,7 @@ class Controller:
         self.last_arc = None
         self.last_target = None
         self.mode = "drive"
+        self.debug = {}          # arcs, scores, feasibility, speed caps (for viz)
 
     @property
     def recovering(self):
@@ -152,6 +153,7 @@ class Controller:
             self.recovery, self.recovery_steer = 14, side
             return self._reverse(side)
 
+        self.debug = {"arcs": pts, "feasible": feasible, "clear": clear, "steers": steers}
         end = pts[:, -1]
         wd = np.linalg.norm(target - pose)
         prog = wd - np.linalg.norm(target[None] - end, axis=1)
@@ -162,16 +164,15 @@ class Controller:
         best = int(np.argmax(score))
         steer = float(steers[best])
         self.last_arc = pts[best]
-        throttle = float(np.clip(min(np.clip(clear[best] / 3.5, 0.35, 1.0),
-                                     1.0 - 0.4 * abs(steer),
-                                     np.clip(goal_d / 8.0, 0.3, 1.0)), 0.25, 1.0))
+        caps = {"clearance": float(np.clip(clear[best] / 3.5, 0.35, 1.0)),
+                "turn": 1.0 - 0.4 * abs(steer),
+                "goal": float(np.clip(goal_d / 8.0, 0.3, 1.0))}
         # thread tight gaps slowly: with actuation latency, speed turns a
         # near-miss into a graze
         ahead = bmap.guard_ahead(3, 8)
-        if ahead < R + 1.25:
-            throttle = min(throttle, 0.35)
-        elif ahead < R + 2.75:
-            throttle = min(throttle, 0.55)
+        caps["gap"] = 0.35 if ahead < R + 1.25 else (0.55 if ahead < R + 2.75 else 1.0)
+        throttle = float(np.clip(min(caps.values()), 0.25, 1.0))
+        self.debug.update(score=score, best=best, caps=caps, gap_m=ahead)
         self.prev_steer = steer
         self.mode = "drive"
         return throttle, steer
