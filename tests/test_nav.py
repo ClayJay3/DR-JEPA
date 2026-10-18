@@ -71,3 +71,13 @@ def test_navigator_drives_toward_goal():
     for _ in range(4):
         cmd = nav.step(np.zeros((240, 320, 3), np.uint8), s)
     assert cmd.steer > 0.5
+
+
+def test_navigator_rejects_bad_inputs():
+    import pytest
+    nav = Navigator(FlatWorld())
+    s = {"x": 0.0, "z": 0.0, "heading": 0.0, "speed": 0.0, "goal_x": 0.0, "goal_z": 10.0}
+    with pytest.raises(ValueError, match="Camera"):
+        nav.step(np.zeros((240, 320, 3), np.uint8), s)
+    with pytest.raises(ValueError, match="uint8"):
+        nav.step(np.zeros((240, 320, 3), np.float32), s, camera=Camera.from_fov(320, 240, 90))

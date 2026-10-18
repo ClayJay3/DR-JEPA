@@ -122,6 +122,7 @@ class Controller:
         ai, aj = np.clip(ai, 0, n - 1), np.clip(aj, 0, n - 1)
         g_arc = np.where(bmap.GW[ai, aj] > 0.3, bmap.G[ai, aj], 0.0)
         steep = g_arc.max(axis=1) > c.haz_reject * rb.tip_roll
+        steep_near = g_arc[:, :3].max(axis=1) > c.haz_reject * rb.tip_roll
         feasible &= ~steep
         clear = np.where(steep, np.minimum(clear, 0.0), clear)
 
@@ -147,6 +148,12 @@ class Controller:
                 bear = math.atan2(target[0] - pose[0], target[1] - pose[1])
                 err = (bear - yaw + math.pi) % (2 * math.pi) - math.pi
                 steer = float(np.clip(err / math.radians(35.0), -1, 1))
+                # creep only where the ground is believed safe: a tip-over is
+                # terminal (measured: creeping onto believed 0.49-0.54 grade
+                # ground was how two of six slope tip-overs happened)
+                if steep_near[int(np.argmin(np.abs(steers - steer)))]:
+                    self.recovery, self.recovery_steer = 14, side
+                    return self._reverse(side)
                 self.prev_steer = steer
                 self.mode = "creep"
                 return 0.25, steer

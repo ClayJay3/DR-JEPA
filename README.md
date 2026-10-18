@@ -180,6 +180,34 @@ off by up to 30 deg on long recordings).
 
 ---
 
+## Limitations and next steps
+
+Measured, not hypothetical (details in [docs/benchmarks.md](docs/benchmarks.md)):
+
+- **Real terrain needs more real data.** Both labelled real recordings are
+  flat dirt lots. On the held-out Hanksville site the trained models detect
+  obstacles better than a large depth model, but read gently rising ground as
+  flat. The frozen-DINOv3 model and the distilled small model cut that error
+  roughly in half; more varied real terrain (any ZED 2i drive through
+  `tools/zed` + `label-zed`) is the direct fix.
+- **Slopes are the main sim failure.** Every simulated tip-over happened on
+  ground the map had observed, believed gentler than it was. The slope loss
+  (`--grade_q 0.7 --grade_steep_w 4`) more than doubles steep-ground recall at
+  the planner's lethal threshold.
+- **Pose quality bounds contacts.** With perfect perception the stack still
+  grazes ~3x more often than the privileged expert, because a GPS-filtered pose
+  wanders ~1-1.7 m and smears the map. Feed VIO / EKF pose (`"x"`, `"z"`) when
+  you have it.
+- **The world is assumed static.** Moving people leave fading trails in the
+  map (log-odds decay, ~46 s half-life).
+- **Low cameras see far ground at grazing angles.** At 0.4 m, everything
+  10-20 m away lies within a few pixels of the horizon; the map fills in as
+  the robot approaches, but range beyond ~12 m is not trusted for fusion.
+- **Attitude is required.** Feed chassis pitch / roll from any IMU (the ZED 2i
+  has one). Without it, every slope the robot stands on tilts the whole grid.
+
+---
+
 ## Repository layout
 
 ```

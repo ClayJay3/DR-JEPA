@@ -99,7 +99,10 @@ def compute_losses(out, b, cells, teacher=None):
             kd = kd + (F.binary_cross_entropy_with_logits(out[k], torch.sigmoid(teacher[k]), reduction="none")
                        * tv).sum() / tvs
         kd = kd + F.binary_cross_entropy_with_logits(out["vis"], torch.sigmoid(teacher["vis"]))
-        for k in ("obs_h", "elev", "grade"):
+        # grade is NOT distilled: the sim's exact slope labels are better
+        # supervision than a teacher whose slopes are biased low on steep
+        # ground (measured -0.22), and slope is what tips a robot over
+        for k in ("obs_h", "elev"):
             kd = kd + (F.smooth_l1_loss(out[k], teacher[k], beta=0.1, reduction="none") * tv).sum() / tvs
         parts["kd"] = kd
     total = sum(LOSS_W[k] * v for k, v in parts.items())

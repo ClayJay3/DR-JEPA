@@ -39,6 +39,8 @@ class PlannerConfig:
     consistency_r: float = 3.0
     consistency_gate: float = 1.6
     unknown_cost: float = 0.3
+    fatal_slope: float = 0.92        # x tip_roll: believed slope the route never crosses
+    fallback_slope: float = 1.0      # x tip_roll: ... even when no other route exists
 
 
 class Planner:
@@ -88,7 +90,7 @@ class Planner:
         span = max(rb.tip_roll - rb.grade_drive, 1e-3)
         steep = np.clip((g2 - rb.grade_drive) / span, 0.0, 1.0)
         cost += 5.0 * steep
-        fatal = g2 > 0.92 * rb.tip_roll
+        fatal = g2 > c.fatal_slope * rb.tip_roll
         s2 = ds(1.0 / (1.0 + np.exp(-bmap.LS[sl])), np.max)
         cost += 3.0 * s2
         o2 = ds(bmap.observed(sl), np.max)
@@ -114,7 +116,7 @@ class Planner:
         s, g = cell(pose), cell(goal)
         path = astar(cost, lethal, s, g, c.heuristic_w, c.max_expansions)
         if path is None:
-            path = astar(cost, (d2 < rb.radius + c.hard_margin) | (g2 > rb.tip_roll), s, g,
+            path = astar(cost, (d2 < rb.radius + c.hard_margin) | (g2 > c.fallback_slope * rb.tip_roll), s, g,
                          c.heuristic_w, c.max_expansions)
         if path is None:
             self.path = None

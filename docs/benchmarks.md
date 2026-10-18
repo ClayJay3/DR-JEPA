@@ -47,6 +47,39 @@ that merely looks different it hits obstacles 20x as often (wall worlds:
 48.6 % success, 28 contacts per episode). Any real camera looks different
 from any simulator, so this is the generalization that matters.
 
+### Pinned camera rigs (model A, same 144 worlds)
+
+| rig | success | tipped | contacts / ep | stalls / ep | SPL |
+|---|---:|---:|---:|---:|---:|
+| random per episode | 93.8 % | 6.2 % | 0.93 | 0.04 | 0.824 |
+| ZED 2i: 0.40 m, 101.5 deg, level | 86.1 % | 9.7 % | 0.97 | 2.08 | 0.763 |
+| phone: 1.4 m, 66 deg, pitch -8 | 86.8 % | 13.2 % | 0.55 | 0.22 | 0.782 |
+| low-wide: 0.30 m, 120 deg, pitch -5 | 86.1 % | 13.9 % | 1.20 | 0.04 | 0.756 |
+| mast: 2.0 m, 70 deg, pitch -15 | 86.1 % | 13.2 % | 0.58 | 0.15 | 0.780 |
+| rolled: 0.8 m, 90 deg, roll +6 | 88.2 % | 11.1 % | 0.51 | 0.65 | 0.783 |
+
+Every rig drives; the losses are almost entirely tip-overs, which is what
+section 1b is about.
+
+### 1b. Why the robot tips: slopes believed too gentle
+
+For every tip-over of model A, the belief map at the tip location had been
+**observed with high confidence (fusion weight 7-20) but held a slope of
+0.12-0.42 where the truth was 0.53-0.73**. Measured over held-out sim
+episodes (cells with true grade > 0.45 within 12 m):
+
+| grade head | steep AUC | recall at the lethal threshold (0.46) | bias on steep cells | flat cells flagged |
+|---|---:|---:|---:|---:|
+| A: L1 regression | 0.90 | 20 % | -0.22 | 0.00 % |
+| A2: steep-weighted pinball (q 0.7, w 4) | -- | **60 %** | -- | 0.31 % |
+
+The network *ranks* slopes well but regression shrinks rare steep cells
+toward the flat majority. Weighting steep cells and penalizing
+under-estimation (it tips you; over-estimation costs a detour) triples
+recall at the planner's threshold for a 0.3 % false-alarm rate on flat
+ground. Lowering the threshold on the unfixed model instead (0.35: 50 %
+recall) flags a quarter of drivable 0.30-0.45 slopes as lethal.
+
 ---
 
 ## 2. Real-world perception (held-out site, ZED 2i stereo truth)

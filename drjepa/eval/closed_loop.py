@@ -117,6 +117,19 @@ def _episode(seed, policy, nav, oracle, a, record_dir=None):
     return res
 
 
+def nav_config(overrides):
+    """NavConfig with 'section.key=value' overrides (section = map /
+    planner / control, or a top-level NavConfig field)."""
+    from ..nav.navigator import NavConfig
+    cfg = NavConfig()
+    for o in overrides or []:
+        k, v = o.split("=", 1)
+        obj, name = (getattr(cfg, k.split(".")[0]), k.split(".")[1]) if "." in k else (cfg, k)
+        cur = getattr(obj, name)
+        setattr(obj, name, type(cur)(v) if not isinstance(cur, bool) else v.lower() in ("1", "true"))
+    return cfg
+
+
 def _worker(job):
     seeds, a, wid = job
     import torch
@@ -124,11 +137,12 @@ def _worker(job):
     nav, oracle = None, None
     if a.policy != "expert":
         from ..nav.navigator import Navigator
+        cfg = nav_config(a.nav)
         if a.policy == "oracle":
             oracle = OraclePerception()
-            nav = Navigator(oracle)
+            nav = Navigator(oracle, cfg=cfg)
         else:
-            nav = Navigator(a.checkpoint)
+            nav = Navigator(a.checkpoint, cfg=cfg)
     out = []
     for i, s in enumerate(seeds):
         rec = a.record_dir if (wid == 0 and i < a.record) else None
@@ -171,6 +185,8 @@ def main():
     ap.add_argument("--no_progress_s", type=float, default=60.0)
     ap.add_argument("--record", type=int, default=0, help="record the first N episodes of worker 0")
     ap.add_argument("--record_dir", default="bench/videos")
+    ap.add_argument("--nav", nargs="*", default=[],
+                    help="navigation overrides, e.g. control.haz_reject=0.8 planner.fatal_slope=0.85")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     seeds = list(range(a.seed, a.seed + a.episodes))
@@ -188,6 +204,7 @@ def main():
     s["wall_s"] = time.time() - t0
     s["policy"], s["camera"] = a.policy, a.camera
     s["checkpoint"] = a.checkpoint if a.policy == "model" else None
+    s["nav_overrides"] = a.nav
     print(json.dumps({k: v for k, v in s.items() if k != "by_scenario"}, indent=1))
     for k, v in s["by_scenario"].items():
         print(f"  {k:9s} n={v['n']:3d} success {v['success']:.3f} tipped {v['tipped']:.3f} "

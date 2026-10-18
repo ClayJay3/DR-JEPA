@@ -133,6 +133,10 @@ class Navigator:
         the exact camera pose (R, t) in the robot frame (else it is the
         camera mount composed with the IMU pitch / roll in `sensors`)."""
         cam = camera or self.camera
+        if cam is None:
+            raise ValueError("Navigator needs a Camera: pass camera= to Navigator(...) or step(...)")
+        if rgb.ndim != 3 or rgb.shape[2] != 3 or rgb.dtype != np.uint8:
+            raise ValueError(f"expected an (H, W, 3) uint8 RGB image, got {rgb.shape} {rgb.dtype}")
         t0 = time.perf_counter()
         pose, heading, goal = self.pose_filter.update(sensors)
         if self.map.corner is None:
