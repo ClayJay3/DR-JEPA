@@ -18,9 +18,13 @@ from .model import GeoBEV, ModelConfig
 
 
 class Perceiver:
-    """Loads a GeoBEV checkpoint and runs it on single frames."""
+    """Loads a GeoBEV checkpoint and runs it on single frames.
 
-    def __init__(self, checkpoint, device=None, half=True):
+    `half` runs under fp16 autocast. Off by default: at batch 1 the casts
+    cost more than they save (RTX 4080: B0 4.5 vs 5.9 ms per call, DINOv3
+    6.3 vs 7.6 ms); for embedded fp16 use the ONNX export with TensorRT."""
+
+    def __init__(self, checkpoint, device=None, half=False):
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         ck = torch.load(checkpoint, map_location="cpu", weights_only=False)
         self.cfg = ModelConfig.from_dict(ck["model_cfg"])

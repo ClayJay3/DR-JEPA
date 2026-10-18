@@ -10,10 +10,11 @@ smoothness -- the privileged expert's recipe on the believed world.
 Recovery behaviours (all measured necessary in v9-v12):
   * creep: in a tight gap the conservative arc check may reject everything
     while A* says the corridor is passable -- creep along the route slowly
-    instead of thrashing into recovery;
+    (on slope-safe arcs) instead of thrashing into recovery;
   * map-checked reverse: the map remembers what is behind; stop reversing
-    when the rear closes or the front opens (a blind fixed-length reverse
-    backed into obstacles the robot had already seen);
+    when the rear closes (obstacle or believed-steep ground) or the front
+    opens (a blind fixed-length reverse backed into obstacles the robot had
+    already seen);
   * escape turn when boxed in both ways.
 Throttle = min(clearance, turn, goal-distance, gap-width caps). There is
 deliberately NO sand brake: in soft ground momentum is what gets you
@@ -41,6 +42,7 @@ class ControlConfig:
     climb_reject: float = 0.9        # x grade_block: ... on believed uphill grade
     stuck_speed: float = 0.35
     stuck_frames: int = 12
+    creep_slope_safe: bool = True    # creep only along believed slope-safe arcs
 
 
 class Controller:
@@ -77,6 +79,15 @@ class Controller:
         w = int(np.searchsorted(along, self.cfg.lookahead))
         return seg[min(w + 1, len(seg) - 1)]
 
+    def _slope_excess(self, bmap, ai, aj, heading):
+        """Believed slope as a fraction of the robot's limits for travel at
+        `heading` (> 1 = past a side-slope, downhill or climb limit)."""
+        c, rb = self.cfg, self.robot
+        pitch, roll = bmap.slope_along(ai, aj, heading)
+        return np.maximum.reduce([roll / (c.roll_reject * rb.tip_roll),
+                                  -pitch / (c.descend_reject * rb.tip_pitch),
+                                  pitch / (c.climb_reject * rb.grade_block)])
+
     def _reverse(self, steer):
         self.prev_steer = steer
         self.mode = "reverse"
@@ -95,10 +106,14 @@ class Controller:
             self.recovery -= 1
             back = pose[None] - np.array([math.sin(yaw), math.cos(yaw)])[None] * np.array([[0.9], [1.7], [2.5]])
             rear = float(planner.clearance(bmap, back).min())
+            bi, bj = np.clip(bmap.index(back[:, 0], back[:, 1]), 0, bmap.cfg.cells - 1)
+            # the chassis keeps its heading while backing: same tip limits
+            rear_steep = self._slope_excess(bmap, bi, bj, yaw).max() > 1.0
             front = bmap.guard_ahead(2, 6)
-            if rear < R + 0.3 or front > R + 1.45:
+            blocked = rear < R + 0.3 or rear_steep
+            if blocked or front > R + 1.45:
                 self.recovery = 0
-                if rear < R + 0.3 and front <= R + 1.45:
+                if blocked and front <= R + 1.45:
                     self.escape = 8
                     self.recovery_steer = -self.recovery_steer
             else:
@@ -123,9 +138,8 @@ class Controller:
         ai, aj = bmap.index(pts[..., 0], pts[..., 1])
         n = bmap.cfg.cells
         ai, aj = np.clip(ai, 0, n - 1), np.clip(aj, 0, n - 1)
-        pitch_g, roll_g = bmap.slope_along(ai, aj, seg_yaw)
-        steep = ((roll_g > c.roll_reject * rb.tip_roll) | (-pitch_g > c.descend_reject * rb.tip_pitch)
-                 | (pitch_g > c.climb_reject * rb.grade_block)).any(axis=1)
+        excess = self._slope_excess(bmap, ai, aj, seg_yaw)
+        steep = (excess > 1.0).any(axis=1)
         feasible &= ~steep
         clear = np.where(steep, np.minimum(clear, 0.0), clear)
 
@@ -151,6 +165,16 @@ class Controller:
                 bear = math.atan2(target[0] - pose[0], target[1] - pose[1])
                 err = (bear - yaw + math.pi) % (2 * math.pi) - math.pi
                 steer = float(np.clip(err / math.radians(35.0), -1, 1))
+                # creep follows the route, but only along arcs whose first
+                # metres are believed slope-safe (else the least steep one):
+                # 6 of 10 low-camera tip-overs were creeping onto believed-
+                # steep ground. Never *reverse* for slope instead -- the
+                # ground behind was never seen (measured: +3 tips).
+                if c.creep_slope_safe:
+                    near = excess[:, :4].max(axis=1)
+                    safe = np.flatnonzero(near <= 1.0)
+                    k = safe[np.argmin(np.abs(steers[safe] - steer))] if len(safe) else int(np.argmin(near))
+                    steer = float(steers[k])
                 self.prev_steer = steer
                 self.mode = "creep"
                 return 0.25, steer
