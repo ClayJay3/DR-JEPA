@@ -228,7 +228,7 @@ data_wall*/
 data_dagger*/
 data_v8*/
 packed*/
-runs/
+/runs/
 eval_out*/
 eval_v*/
 eval_final/
@@ -245,10 +245,12 @@ matrix_*/
 *.drjepa
 
 # DR-JEPA generated / raw data (never commit)
-recordings/
-packed/
-runs/
+/recordings/
+/packed/
+/runs/
 eval_out/
-bench/
+/bench/
 *.pth
 *.onnx
+/data/
+*.log

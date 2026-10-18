@@ -1,271 +1,106 @@
-"""Single source of truth for every tunable in the project."""
+"""Every tunable in one place, grouped by concern.
 
-import math
-from dataclasses import dataclass, field, asdict
+RobotProfile   the vehicle: footprint, dynamics, and what terrain it can
+               handle. Physics, the expert, labels and the planner all read
+               it, so one profile describes one robot everywhere.
+GridConfig     the perception grid (robot-frame ground cells ahead).
+SimConfig      episode logic, sensor noise, and camera randomization.
+"""
 
-import numpy as np
-
-# Number of camera-descriptor features the model is conditioned on.
-CAM_DIM = 5
-
-
-def camera_features(f_norm, cam_h, pitch_deg):
-    """The camera descriptor the perception trunk is conditioned on.
-
-    Scalars or numpy arrays; returns (..., CAM_DIM) float32.
-
-    Without this the network cannot know which camera it is looking through,
-    so it memorizes ONE image-row -> range table and applies it to every
-    camera. Measured on v12: held-out SIM elevation correlation 0.91, held-out
-    REAL (ZED at 0.6 m vs the sim's fixed 1.1 m) correlation 0.04, with a
-    systematic -1.16 m bias at 15 m. That is a wrong camera model, not a weak
-    one -- so the camera is now an INPUT, and the simulator randomizes it.
-
-    The features are the quantities projective geometry actually needs:
-      f_norm  focal length in units of half-image-width -- i.e. 1/tan(fov/2).
-              Defined in the model's 448x448 input frame, AFTER any crop and
-              resize, so sim and real cameras are directly comparable.
-      cam_h   camera height above the ground the rover drives on (m).
-      pitch   instantaneous camera pitch (deg, + = nose up). Sets where the
-              horizon falls, which is what anchors row -> range.
-      f_norm * cam_h  is handed over explicitly because it IS the row->range
-              scale: a ground point at range z images at (v - v_horizon) =
-              f * cam_h / z. Making the network multiply two of its own inputs
-              to recover the one number that matters is a needless ask.
-    """
-    f_norm = np.asarray(f_norm, dtype=np.float32)
-    cam_h = np.asarray(cam_h, dtype=np.float32)
-    p = np.radians(np.asarray(pitch_deg, dtype=np.float32))
-    return np.stack([f_norm,
-                     cam_h / 1.5,
-                     np.sin(p),
-                     np.cos(p),
-                     f_norm * cam_h / 1.5], axis=-1).astype(np.float32)
+from dataclasses import asdict, dataclass, field
 
 
-def fov_to_fnorm(fov_deg):
-    """Horizontal FOV (deg) -> f_norm, for a full-frame (uncropped) image."""
-    return 1.0 / math.tan(math.radians(fov_deg) / 2.0)
+@dataclass
+class RobotProfile:
+    """Physical robot description (defaults = the simulated URC rover)."""
+    radius: float = 0.75              # collision footprint (m)
+    v_max: tuple = (4.0, 8.0)         # top speed (m/s); a range is drawn per
+    #                                   sim episode, a real robot uses one value
+    accel_max: float = 3.0            # m/s^2
+    yaw_rate_max: float = 70.0        # deg/s at full steering
+    steer_tau: float = 0.25           # steering first-order lag (s)
+    latency_steps: int = 2            # actuation latency (control steps)
+    step_height: float = 0.25         # rigid obstacles shorter than this are
+    #                                   driven over (wheel radius ~ curb height)
+    grade_drive: float = 0.35         # comfortable grade (rise/run)
+    grade_block: float = 0.55         # climbing steeper than this stalls
+    tip_roll: float = 0.50            # lateral grade that tips the robot
+    sand_drag: float = 0.55           # fraction of speed lost in deep sand
+
+    @property
+    def v_top(self):
+        """Single representative top speed (upper end of the range)."""
+        return self.v_max[1] if isinstance(self.v_max, (tuple, list)) else float(self.v_max)
 
 
-def fnorm_from_intrinsics(f_pix, crop_px):
-    """Real camera -> f_norm in the model's input frame.
+@dataclass
+class GridConfig:
+    """Robot-frame perception grid: `cells` x `cells` at `res` metres,
+    covering x in [-cells*res/2, +cells*res/2] (right) and z in
+    [0, cells*res] (forward). Indexed [i = x, j = z]."""
+    cells: int = 48
+    res: float = 0.5
 
-    `f_pix` is the horizontal focal length in ORIGINAL sensor pixels (after
-    any upright rotation, so it is the focal along the image's x axis), and
-    `crop_px` the side length of the centered square crop that gets resized
-    to the model's input. Resizing crop_px -> img_size scales the focal by
-    img_size/crop_px, and f_norm divides by img_size/2, so img_size cancels:
-        f_norm = f_pix * (img/crop) / (img/2) = 2 * f_pix / crop_px
-    """
-    return 2.0 * float(f_pix) / float(crop_px)
+    @property
+    def half(self):
+        """Half-width of the grid (m)."""
+        return self.cells * self.res / 2.0
+
+    @property
+    def depth(self):
+        """Forward reach of the grid (m)."""
+        return self.cells * self.res
 
 
 @dataclass
 class SimConfig:
-    """Simulation / rendering parameters (data generation + live testing)."""
-    img_w: int = 448                 # render resolution; keep >= ModelConfig.img_size
-    img_h: int = 448                 # or the extra model resolution buys nothing
-    fov_deg: float = 90.0
-    dt: float = 0.1                  # control period (10 Hz)
-    cam_height: float = 1.1          # camera height above local terrain (m)
-    cam_pitch_deg: float = 0.0       # MOUNT pitch (+ = nose up); terrain slope
-    #                                  and ride bumps are added on top of this
-    rover_radius: float = 0.75       # collision footprint (m)
+    """Simulator episode, sensor and camera-randomization parameters."""
+    dt: float = 0.1                   # control period (10 Hz)
+    goal_radius: float = 4.0
+    max_frames: int = 900
+    no_progress_s: float = 0.0        # 0 = off (data gen); eval sets 60 s
+    progress_eps: float = 0.25
 
-    # ---- per-episode camera randomization ----
-    # Every episode draws its own camera. Before this, all 550 episodes shared
-    # ONE camera (1.1 m, 90 deg, no mount pitch), so "read the image row" was a
-    # perfect strategy in sim and a catastrophic one on any other camera. With
-    # the camera randomized AND supplied as an input (see camera_features), no
-    # single row->range table works, which forces the trunk to actually use it.
-    # Ranges bracket the real rigs: ZED at 0.6 m, phone at ~1.4 m, plus room to
-    # extrapolate. Set cam_randomize=False to reproduce the old fixed camera.
-    cam_randomize: bool = True
-    cam_height_range: tuple = (0.4, 2.0)     # m above local terrain
-    cam_fov_range: tuple = (60.0, 120.0)     # horizontal FOV (deg)
-    cam_pitch_range: tuple = (-25.0, 5.0)    # mount pitch (deg, + = nose up)
+    # sensor noise
+    gps_walk_sigma: float = 0.35
+    gps_noise_sigma: float = 0.25
+    heading_bias_sigma: float = 2.5
+    heading_noise_sigma: float = 1.0
+    imu_noise_deg: float = 0.3        # attitude noise on reported pitch/roll
 
-    # Vehicle dynamics
-    v_max: float = 6.0               # nominal top speed (m/s), randomized per episode
-    accel_max: float = 3.0           # m/s^2
-    yaw_rate_max: float = 70.0       # deg/s at full steering
-    steer_tau: float = 0.25          # steering first-order lag (s)
-    latency_steps: int = 2           # actuation latency in control steps (200 ms)
-
-    # Sensor noise
-    gps_walk_sigma: float = 0.35     # random-walk (m per sqrt(s))
-    gps_noise_sigma: float = 0.25    # white noise (m)
-    heading_bias_sigma: float = 2.5  # slowly-varying compass bias (deg)
-    heading_noise_sigma: float = 1.0 # white compass noise (deg)
-
-    # Terrain hazard limits (shared by physics, expert costs, and GT labels)
-    grade_drive: float = 0.35        # comfortable grade (rise/run)
-    grade_block: float = 0.55        # climbing steeper than this stalls out
-    tip_roll: float = 0.50           # lateral grade that tips the rover over
-    sand_drag: float = 0.55          # fraction of speed lost in deep sand
-
-    # Episode logic
-    goal_radius: float = 4.0         # success distance (m)
-    max_frames: int = 900            # hard backstop per episode (frames)
-    no_progress_s: float = 0.0       # give up after this many seconds without
-    #                                  getting closer to the goal than ever
-    #                                  before. 0 = disabled (data generation
-    #                                  keeps the plain max_frames cap). Eval
-    #                                  uses it so a SLOW-but-closing rover is
-    #                                  not scored the same as a stuck one.
-    progress_eps: float = 0.25       # metres of improvement that count as
-    #                                  progress (ignores GPS/pose jitter)
-
-
-@dataclass
-class ModelConfig:
-    """RoverJEPA architecture."""
-    img_size: int = 448              # backbone input resolution; must be a
-    #                                  multiple of the patch size (14 for
-    #                                  DINOv2, 16 for DINOv3 -- 448 works for
-    #                                  both). Frames are resized to this.
-    backbone: str = "dinov3_vits16"  # frozen; features are precomputed.
-    #                                  dinov2_* loads from torch.hub (open);
-    #                                  dinov3_* loads via HF transformers.
-    backbone_weights: str = "facebook/dinov3-vits16-pretrain-lvd1689m"
-    #                                  HF model id (or local dir) for DINOv3;
-    #                                  weights are license-gated, so accept
-    #                                  the licence + `huggingface-cli login`
-    #                                  once and it downloads automatically
-    #                                  (or override with DINOV3_WEIGHTS env)
-    feat_dim: int = 384              # ViT-S embedding width (same v2 and v3)
-    cam_dim: int = CAM_DIM           # camera descriptor width (see
-    #                                  camera_features): the trunk is
-    #                                  CONDITIONED on the camera instead of
-    #                                  assuming the one it was trained on
-    pool_rows: int = 24              # patch-token pooling grid (vertical) --
-    pool_cols: int = 24              # 24x24 (was 12) for finer small-object
-    #                                  detail; DINOv3@448 has a 28x28 grid to
-    #                                  pool from, wedge (48) is a clean 2x up
-    n_tokens: int = 577              # pool_rows*pool_cols + CLS
-
-    # Metric mapping (the persistent spatial memory)
-    wedge_cells: int = 48            # per-frame occupancy wedge (48x48)
-    wedge_res: float = 0.5           # metres per cell (24m x 24m ahead)
-    wedge_range_cells: int = 32      # supervise/trust only the near 16 m
-    map_cells: int = 512             # persistent world map (256m x 256m)
-    # multi-frame perception: the wedge decoder sees the current frame plus
-    # these lookbacks (control steps), giving it motion parallax
-    frame_offsets: tuple = (0, 2, 4)
-    # map-space JEPA (completion of unobserved map areas)
-    comp_cells: int = 80             # completion crop (80 m x 80 m @ 1 m)
-    comp_res: float = 1.0
-
-    # Training-window geometry (also used by the dataset loader). The
-    # temporal/embedding JEPA branch was removed after v11; seq_len and
-    # jepa_offsets survive only to size dataset windows (W = seq_len +
-    # max(jepa_offsets)), and action_horizon/ctx_dim to shape logged
-    # label/context arrays the loss no longer consumes.
-    seq_len: int = 12
-    jepa_offsets: tuple = (1, 4, 8)
-    action_horizon: int = 8
-    ctx_dim: int = 4                 # [dist, sin(bearing), cos(bearing), speed]
-
-    # Context normalization
-    dist_norm: float = 100.0         # metres mapped to 1.0 (capped)
-    speed_norm: float = 10.0         # m/s mapped to 1.0
-
-
-@dataclass
-class TrainConfig:
-    """Optimization schedule, dataset split, and loss weights."""
-    epochs: int = 60
-    batch_size: int = 64             # halved for the 24x24 token grid: 4x the
-    #                                  tokens = 4x decoder activations, and
-    #                                  128 no longer fits 16 GB VRAM alongside
-    #                                  the desktop (peaks 12.8 GB vs 6.4 here)
-    lr: float = 3e-4
-    min_lr: float = 1e-5
-    warmup_epochs: int = 3
-    weight_decay: float = 0.05
-    patience: int = 15         # the camera-conditioned task converges slower
-    #                            than the fixed-camera one did (the trunk has
-    #                            to learn to USE the camera, not memorize one),
-    #                            and the first run was still improving when a
-    #                            12-epoch patience cut it off at ep29
-    val_split: float = 0.15          # fraction of episodes held out
-    window_stride: int = 6           # frames between training windows
-    num_workers: int = 8
-
-    # Loss weights
-    w_safety: float = 0.5            # danger head ("trouble within ~1 s")
-    w_map: float = 2.0               # occupancy-wedge prediction (primary)
-    w_elev: float = 1.0              # elevation regression (terrain wedge)
-    w_sand: float = 0.5              # soft-ground classification
-    w_haz: float = 1.0               # steep-ground classification (tip risk)
-    w_complete: float = 1.0          # map-space JEPA (hidden-map prediction)
-    sand_pos_weight: float = 3.0     # sand is ~1.4% of visible cells and had
-    #                                  NO pos_weight at all -- the head learned
-    #                                  to sit deeply negative (AUC 0.87 but it
-    #                                  fired on 0.02% of cells vs 1.4% actual),
-    #                                  so the rover ignored soft ground.
-    haz_pos_weight: float = 4.0      # was hardcoded in model.py; surfaced here
-    occ_pos_weight: float = 4.0      # was 1.5, tuned when every episode shared
-    #                                  ONE camera and "read the image row" was
-    #                                  an exact solution. Conditioned on 550
-    #                                  cameras the trunk still RANKS obstacles
-    #                                  as well (val occ AUC 0.88-0.98) but
-    #                                  commits far less readily: val IoU fell
-    #                                  0.084 -> 0.053 and closed-loop contacts
-    #                                  rose 1.9 -> 2.9/ep. Compensating at
-    #                                  deploy (PRIOR_LOGIT -3.5 -> -5.5) does
-    #                                  fix contacts (4.77 -> 1.77) but amplifies
-    #                                  false positives with the true ones, so
-    #                                  the rover detours round phantoms and SPL
-    #                                  collapses 0.71 -> 0.58. Teach the head to
-    #                                  fire on REAL obstacles instead of
-    #                                  amplifying all of its evidence later.
-    dagger_weight: float = 0.5       # sampling weight for DAgger episodes
-    real_weight: float = -1.0        # sampling weight for real (phone-
-    #                                  captured) episodes; < 0 = auto-balance
-    #                                  real up to REAL_TARGET_SHARE of the
-    #                                  sampled signal (capped, see dataset.py),
-    #                                  >= 0 = use this fixed weight
+    # camera: drawn per episode unless a fixed Camera is passed to RoverSim
+    resolutions: tuple = ((640, 480), (640, 360), (512, 512), (640, 400),
+                          (576, 432), (720, 405))
+    hfov_range: tuple = (50.0, 125.0)
+    height_range: tuple = (0.3, 2.2)
+    pitch_range: tuple = (-28.0, 6.0)
+    roll_range: tuple = (-6.0, 6.0)
+    pp_jitter: float = 0.03           # principal point offset (fraction)
+    supersample: int = 2
 
 
 @dataclass
 class Config:
-    """Bundle of all three config groups.
-
-    A snapshot of this (via `to_dict`) is stored inside every checkpoint so
-    inference always reconstructs the exact architecture it was trained
-    with, regardless of later edits to the defaults in this file.
-    """
+    """Bundle stored inside checkpoints so inference rebuilds what trained."""
+    robot: RobotProfile = field(default_factory=RobotProfile)
+    grid: GridConfig = field(default_factory=GridConfig)
     sim: SimConfig = field(default_factory=SimConfig)
-    model: ModelConfig = field(default_factory=ModelConfig)
-    train: TrainConfig = field(default_factory=TrainConfig)
 
     def to_dict(self):
-        """Plain-dict form for embedding in checkpoints (JSON-safe)."""
+        """Plain dict (JSON-safe)."""
         return asdict(self)
 
     @staticmethod
     def from_dict(d):
-        """Rebuild a Config from a checkpoint snapshot (inverse of to_dict).
-
-        Tuple-valued fields are restored explicitly because asdict/torch
-        serialization round-trips them as lists.
-        """
-        m = dict(d.get("model", {}))
-        for key, default in (("jepa_offsets", (1, 4, 8)),
-                             ("frame_offsets", (0, 2, 4))):
-            m[key] = tuple(m.get(key, default))
-        s = dict(d.get("sim", {}))
-        for key, default in (("cam_height_range", (0.4, 2.0)),
-                             ("cam_fov_range", (60.0, 120.0)),
-                             ("cam_pitch_range", (-25.0, 5.0))):
-            s[key] = tuple(s.get(key, default))
-        return Config(
-            sim=SimConfig(**s),
-            model=ModelConfig(**m),
-            train=TrainConfig(**d.get("train", {})),
-        )
-
-
-DEFAULT = Config()
+        """Inverse of to_dict (tuples restored from lists)."""
+        def tup(dc, cls):
+            kw = {}
+            for k, v in (d.get(dc) or {}).items():
+                if k not in cls.__dataclass_fields__:
+                    continue
+                if isinstance(v, list):
+                    v = tuple(tuple(x) if isinstance(x, list) else x for x in v)
+                kw[k] = v
+            return cls(**kw)
+        return Config(robot=tup("robot", RobotProfile), grid=tup("grid", GridConfig),
+                      sim=tup("sim", SimConfig))

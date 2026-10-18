@@ -7,8 +7,8 @@ Two layers, mirroring a classic autonomy stack:
     a waypoint ~12 m ahead on the A* path while trading off clearance and
     smoothness. When boxed in, it reverses toward the more open side.
 
-Used to generate demonstration labels for behavior cloning and as a
-closed-loop baseline in evaluation.
+Used to drive data-generation episodes and as the privileged upper bound
+in closed-loop evaluation.
 """
 
 import heapq
@@ -31,7 +31,8 @@ class GridPlanner:
         start/goal bounding box so routes can swing around wide walls.
         When `terrain` is given, steep grades become lethal cells and
         moderate slopes / sand raise traversal cost, so routes go around
-        washes and over saddles the way a human driver would.
+        washes and over saddles the way a human driver would. `sim_cfg` is
+        the RobotProfile (grade limits).
         """
         self.goal = np.asarray(goal, float)
         lo = np.minimum(start, goal) - margin
@@ -211,9 +212,9 @@ class ArcPlanner:
         self.steers = np.linspace(-1.0, 1.0, self.N_ARCS)
         self.n_steps = int(self.HORIZON_S / self.ARC_DT)
         self.grid = GridPlanner(sim.obs_xz, sim.obs_rad,
-                                sim.cfg.rover_radius + 0.45,
+                                sim.robot.radius + 0.45,
                                 (sim.x, sim.z), (sim.goal_x, sim.goal_z),
-                                terrain=sim.terrain, sim_cfg=sim.cfg)
+                                terrain=sim.terrain, sim_cfg=sim.robot)
         self._since_replan = 0
 
     # ------------------------------------------------------------------
@@ -221,7 +222,7 @@ class ArcPlanner:
         """Positions of all candidate arcs: (N_ARCS, n_steps, 2)."""
         sim = self.sim
         yaw0 = math.radians(sim.yaw)
-        yaw_rates = np.radians(self.steers * sim.cfg.yaw_rate_max)
+        yaw_rates = np.radians(self.steers * sim.robot.yaw_rate_max)
         t = (np.arange(1, self.n_steps + 1) * self.ARC_DT)[None, :]
         yaws = yaw0 + yaw_rates[:, None] * t
         # integrate positions incrementally (mid-point yaw per segment)
@@ -244,7 +245,7 @@ class ArcPlanner:
             return np.full(len(pts), 99.0)
         oxz = sim.obs_xz[near]                       # (M, 2)
         # extra margin absorbs steering lag / wheel slip the arcs don't model
-        orad = sim.obs_rad[near] + sim.cfg.rover_radius + 0.25
+        orad = sim.obs_rad[near] + sim.robot.radius + 0.25
         d = np.linalg.norm(pts[:, :, None, :] - oxz[None, None, :, :], axis=-1)
         clear = d - orad[None, None, :]
         return clear.min(axis=(1, 2))
@@ -293,8 +294,8 @@ class ArcPlanner:
         pitch = np.abs(dh) / max(seg_len, 1e-6)
         grades = sim.terrain.grade(pts[..., 0].ravel(),
                                    pts[..., 1].ravel()).reshape(pts.shape[:2])
-        terrain_ok = ((pitch.max(axis=1) < sim.cfg.grade_block * 0.85) &
-                      (grades.max(axis=1) < sim.cfg.tip_roll * 0.95))
+        terrain_ok = ((pitch.max(axis=1) < sim.robot.grade_block * 0.85) &
+                      (grades.max(axis=1) < sim.robot.tip_roll * 0.95))
         feasible &= terrain_ok
         # steep arcs also read as "low clearance" so recovery direction
         # choice and scoring prefer gentle ground
@@ -350,9 +351,9 @@ class ArcPlanner:
 class NoiseInjector:
     """Occasional steering perturbations during data generation.
 
-    The *executed* command is perturbed while the *logged label* stays clean,
-    so the dataset contains off-policy states with corrective labels
-    (ChauffeurNet-style synthetic disturbances).
+    Perturbing the executed command pushes the rover off the expert's ideal
+    line, so the perception dataset also sees the views a learned pilot
+    actually produces: skewed approaches, near-misses, recoveries.
     """
 
     def __init__(self, rng, p_start=0.012):
