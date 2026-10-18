@@ -145,3 +145,61 @@ def format_table(name, res):
                      f"(P {r['precision']:.2f} R {r['recall']:.2f})"
                      + (f"  elevMAE {r['elev_mae']:.3f} m" if "elev_mae" in r else ""))
     return "\n".join(lines)
+
+
+def main():
+    """CLI: score a GeoBEV checkpoint (or the depth teacher) on episodes."""
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--checkpoint", default=None, help="GeoBEV checkpoint")
+    ap.add_argument("--teacher", default=None, choices=["Small", "Base"],
+                    help="score the Depth Anything V2 teacher instead")
+    ap.add_argument("--episodes", nargs="+", required=True)
+    ap.add_argument("--stride", type=int, default=2)
+    ap.add_argument("--square_crop", action="store_true",
+                    help="only score cells inside the centred square crop's view")
+    ap.add_argument("--out", default=None)
+    a = ap.parse_args()
+    if a.teacher:
+        from ..perception.teacher import DepthTeacher
+        t = DepthTeacher(a.teacher)
+
+        def method(ep, k):
+            g = t(ep.rgb(k), ep.camera, R=ep.R[k], t=ep.t[k])
+            return {"occ": g["score"], "elev": g["elev"], "vis": g["vis"], "occ_threshold": t.step}
+        name = f"teacher DA-V2-{a.teacher}"
+    else:
+        from ..perception.infer import Perceiver
+        method = Perceiver(a.checkpoint).benchmark_method()
+        name = a.checkpoint
+    mask = square_crop_mask if a.square_crop else None
+    results = {}
+    for e in a.episodes:
+        ep = Episode(e)
+        r = evaluate(method, [ep], stride=a.stride, extra_mask=mask)
+        results[os.path.basename(e.rstrip("/"))] = r
+        print(format_table(f"{name} | {os.path.basename(e.rstrip('/'))}", r), flush=True)
+    if a.out:
+        os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
+        with open(a.out, "w") as f:
+            json.dump({"method": name, "results": results}, f, indent=1)
+
+
+def square_crop_mask(ep, k):
+    """Cells whose ground point projects inside the centred square crop
+    (the legacy model's field of view), for like-for-like comparisons."""
+    cam, C, res = ep.camera, ep.cells, ep.res
+    xs = (np.arange(C) + 0.5) * res - C * res / 2
+    zs = (np.arange(C) + 0.5) * res
+    X, Z = np.meshgrid(xs, zs, indexing="ij")
+    P = np.stack([X, np.nan_to_num(ep.elev[k]), Z], -1).reshape(-1, 3)
+    uv, zc = cam.project(P, ep.R[k], ep.t[k])
+    s = min(cam.width, cam.height)
+    x0, y0 = (cam.width - s) / 2, (cam.height - s) / 2
+    ok = (zc > 0.2) & (uv[:, 0] >= x0) & (uv[:, 0] < x0 + s) & (uv[:, 1] >= y0) & (uv[:, 1] < y0 + s)
+    return ok.reshape(C, C)
+
+
+if __name__ == "__main__":
+    main()

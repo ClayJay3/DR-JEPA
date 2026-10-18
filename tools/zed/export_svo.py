@@ -17,7 +17,7 @@ Runs inside the ZED SDK container (see run.sh). For every SVO it writes a
 Only frames where positional tracking reports OK are written, so every
 exported frame has a trustworthy gravity-aligned pose.
 
-    ./tools/zed/run.sh --svo zed_data/*.svo2 --output recordings/zed --hz 1
+    ./tools/zed/run.sh --svo recordings/svo/*.svo2 --output recordings/zed --hz 1
 """
 
 import argparse

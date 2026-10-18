@@ -150,6 +150,7 @@ def main():
     ap.add_argument("--val_real", nargs="*", default=[])
     ap.add_argument("--real_share", type=float, default=0.15)
     ap.add_argument("--encoder", default="efficientnet_b0")
+    ap.add_argument("--lift", default="geometric", choices=["geometric", "implicit"])
     ap.add_argument("--input_w", type=int, default=512)
     ap.add_argument("--input_h", type=int, default=320)
     ap.add_argument("--epochs", type=int, default=10)
@@ -166,7 +167,7 @@ def main():
     torch.manual_seed(a.seed)
     np.random.seed(a.seed)
     dev = torch.device("cuda")
-    mcfg = ModelConfig(encoder=a.encoder, input_w=a.input_w, input_h=a.input_h)
+    mcfg = ModelConfig(encoder=a.encoder, input_w=a.input_w, input_h=a.input_h, lift=a.lift)
     sim_tr, sim_val = sim_split(a.sim)
     if a.max_sim_eps:
         sim_tr = sim_tr[:a.max_sim_eps]

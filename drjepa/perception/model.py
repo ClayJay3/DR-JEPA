@@ -39,6 +39,11 @@ class ModelConfig:
     res: float = 0.5
     bev_ch: tuple = (96, 128, 192)    # U-Net widths at 48 / 24 / 12 cells
     pretrained: bool = True
+    lift: str = "geometric"           # "geometric" (projection sampling) or
+    #                                   "implicit" (the v12 design: pooled
+    #                                   feature grid + camera vector + learned
+    #                                   up-convolutions) -- kept only so the
+    #                                   two can be A/B'd on identical data
 
     def to_dict(self):
         return asdict(self)
@@ -170,6 +175,52 @@ class BEVNet(nn.Module):
 
 
 # --------------------------------------------------------------------------
+class ImplicitLift(nn.Module):
+    """The v12 view transform, generalized to any camera for the A/B.
+
+    The stride-8 feature map is pooled to a fixed grid, every grid position
+    is concatenated with a camera descriptor (focal lengths, principal
+    point, mount height, pitch, roll and f*h -- the v12 camera conditioning
+    extended to non-square images), and learned transposed convolutions map
+    it to the ground grid. Output rows are re-indexed so image axes map
+    locally onto grid axes (the v8 fix).
+    """
+
+    N_CAM = 10
+
+    def __init__(self, feat_ch, out_ch, cells, grid=24):
+        super().__init__()
+        self.grid, self.cells = grid, cells
+        self.cam = nn.Sequential(nn.Linear(self.N_CAM, 64), nn.GELU(), nn.Linear(64, 64))
+        self.tok = nn.Conv2d(feat_ch + 64, 256, 1)
+        n_up = int(math.log2(cells // grid))
+        ch = [256, 192, 128, 96]
+        layers = [nn.Conv2d(256, 256, 3, 1, 1), nn.GELU()]
+        for i in range(n_up):
+            layers += [nn.ConvTranspose2d(ch[i], ch[i + 1], 4, 2, 1), nn.GELU(),
+                       nn.Conv2d(ch[i + 1], ch[i + 1], 3, 1, 1), nn.GELU()]
+        self.net = nn.Sequential(*layers, nn.Conv2d(ch[n_up], out_ch, 1))
+
+    @staticmethod
+    def camera_vector(K, R, t, hw):
+        H, W = hw
+        fwd, right = R[:, :, 2], R[:, :, 0]
+        pitch = torch.asin(fwd[:, 1].clamp(-1, 1))
+        roll = torch.asin((-right[:, 1]).clamp(-1, 1))
+        fxn, fyn = 2 * K[:, 0, 0] / W, 2 * K[:, 1, 1] / H
+        h = t[:, 1]
+        return torch.stack([fxn, fyn, 2 * K[:, 0, 2] / W - 1, 2 * K[:, 1, 2] / H - 1, h / 1.5,
+                            torch.sin(pitch), torch.cos(pitch), torch.sin(roll),
+                            fyn * h / 1.5, t[:, 2]], 1)
+
+    def forward(self, feat, K, R, t, hw):
+        g = F.adaptive_avg_pool2d(feat, (self.grid, self.grid))
+        c = self.cam(self.camera_vector(K, R, t, hw))
+        x = self.tok(torch.cat([g, c[:, :, None, None].expand(-1, -1, self.grid, self.grid)], 1))
+        out = self.net(x)                                 # image-aligned (row ~ image y)
+        return out.flip(-2).transpose(-1, -2)             # -> [i = x, j = z]
+
+
 class GeoBEV(nn.Module):
     """Image + camera -> ground-grid physical quantities (see module doc)."""
 
@@ -192,7 +243,11 @@ class GeoBEV(nn.Module):
         self.register_buffer("mean", torch.tensor(self.MEAN).view(1, 3, 1, 1), persistent=False)
         self.register_buffer("std", torch.tensor(self.STD).view(1, 3, 1, 1), persistent=False)
         self.n_geo = 3
-        self.bev = BEVNet(K * (cfg.feat_ch + self.n_geo), cfg.bev_ch)
+        if cfg.lift == "implicit":
+            self.implicit = ImplicitLift(cfg.feat_ch, cfg.bev_ch[0], C)
+            self.bev = BEVNet(cfg.bev_ch[0], cfg.bev_ch)
+        else:
+            self.bev = BEVNet(K * (cfg.feat_ch + self.n_geo), cfg.bev_ch)
 
     def lift(self, feat, K, R, t, img_hw):
         """Sample features at every (cell, height) projection.
@@ -226,7 +281,10 @@ class GeoBEV(nn.Module):
         """img (B, 3, H, W) float RGB in [0, 1] at (input_h, input_w)."""
         x = (img - self.mean) / self.std
         f = self.encoder(x)
-        bev = self.lift(f, K, R, t, img.shape[-2:])
+        if self.cfg.lift == "implicit":
+            bev = self.implicit(f, K, R, t, img.shape[-2:])
+        else:
+            bev = self.lift(f, K, R, t, img.shape[-2:])
         out = self.bev(bev)
         return {
             "vis": out[:, 0], "occ": out[:, 1],

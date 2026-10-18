@@ -122,7 +122,8 @@ def level_to_ground(cam, depth, valid, R, h0, rng, max_tilt=15.0, h_tol=0.12):
         return None
     best, bc = None, 0
     for _ in range(200):
-        s = Q[rng.choice(len(Q), 3, replace=False)]
+        s = Q[rng.integers(0, len(Q), 3)]          # (choice w/o replacement
+        #                                            permutes all of Q: 7 s/frame)
         nrm = np.cross(s[1] - s[0], s[2] - s[0])
         nn = np.linalg.norm(nrm)
         if nn < 1e-9:
@@ -139,8 +140,8 @@ def level_to_ground(cam, depth, valid, R, h0, rng, max_tilt=15.0, h_tol=0.12):
     nrm, p0 = best
     inl = Q[np.abs((Q - p0) @ nrm) < 0.04]
     c0 = inl.mean(0)
-    _, _, vt = np.linalg.svd(inl - c0)
-    nrm = vt[-1] if vt[-1][1] > 0 else -vt[-1]
+    w, vec = np.linalg.eigh(np.cov((inl - c0).T))   # smallest-variance axis
+    nrm = vec[:, 0] if vec[1, 0] > 0 else -vec[:, 0]
     h = float(-(c0 @ nrm))                       # camera height above the plane
     if abs(h - h0) > h_tol:
         return None

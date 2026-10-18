@@ -2,7 +2,7 @@
 # Run tools/zed/export_svo.py inside the ZED SDK container. Builds the image on
 # first use, then passes every argument straight through:
 #
-#   ./tools/zed/run.sh --svo zed_data/*.svo2 --output recordings/zed --hz 1
+#   ./tools/zed/run.sh --svo recordings/svo/*.svo2 --output recordings/zed --hz 1
 #
 # $HOME is bind-mounted at the same path and the working dir is the repo root,
 # so host paths (including globs) resolve exactly as they do on the host. The
