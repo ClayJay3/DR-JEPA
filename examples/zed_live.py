@@ -1,7 +1,7 @@
 """Live navigation with a ZED 2i: camera, IMU and positional tracking from
 the ZED SDK, drive commands out.
 
-    python examples/zed_live.py --model geobev.onnx --goal-x 0 --goal-z 30 --mount-height 0.40
+    python examples/zed_live.py --model models/geobev.onnx --goal-x 0 --goal-z 30 --mount-height 0.40
 
 Uses only the LEFT rectified image (DR-JEPA is monocular; stereo is not
 needed at run time). The ZED's gravity-aligned positional tracking (IMU +

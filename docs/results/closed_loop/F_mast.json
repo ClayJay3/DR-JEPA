@@ -1,0 +1,3232 @@
+{
+ "summary": {
+  "n": 144,
+  "success": 0.9097222222222222,
+  "tipped": 0.09027777777777778,
+  "no_progress": 0.0,
+  "timeout": 0.0,
+  "collision_free": 0.9027777777777778,
+  "contacts_per_ep": 0.3680555555555556,
+  "stalls_per_ep": 0.3472222222222222,
+  "spl": 0.8076106586962749,
+  "by_scenario": {
+   "boulders": {
+    "n": 28,
+    "success": 0.8928571428571429,
+    "tipped": 0.10714285714285714,
+    "contacts": 0.10714285714285714,
+    "spl": 0.8176883698348233
+   },
+   "camp": {
+    "n": 27,
+    "success": 0.8888888888888888,
+    "tipped": 0.1111111111111111,
+    "contacts": 0.4444444444444444,
+    "spl": 0.8492516883370863
+   },
+   "dense": {
+    "n": 29,
+    "success": 0.9310344827586207,
+    "tipped": 0.06896551724137931,
+    "contacts": 0.13793103448275862,
+    "spl": 0.8789577621448454
+   },
+   "open": {
+    "n": 29,
+    "success": 0.9310344827586207,
+    "tipped": 0.06896551724137931,
+    "contacts": 0.2413793103448276,
+    "spl": 0.8614302820565444
+   },
+   "wall": {
+    "n": 31,
+    "success": 0.9032258064516129,
+    "tipped": 0.0967741935483871,
+    "contacts": 0.8709677419354839,
+    "spl": 0.6451487622563516
+   }
+  },
+  "latency_ms": {
+   "pose": 0.044073217092402465,
+   "perception": 9.181640680135438,
+   "fusion": 1.3310683122354985,
+   "planning": 2.5916058412646303,
+   "control": 0.2937341770257166
+  },
+  "wall_s": 155.43203449249268,
+  "policy": "model",
+  "camera": "mast",
+  "checkpoint": "runs/geobev/best.pt",
+  "nav_overrides": []
+ },
+ "episodes": [
+  {
+   "seed": 10000,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 185,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9873382326916391,
+   "min_clearance": 0.78,
+   "goal_dist": 67.2,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10001,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 385,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.44498294626865126,
+   "min_clearance": 0.99,
+   "goal_dist": 44.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10002,
+   "scenario": "camp",
+   "spawn": "recovery",
+   "status": "reached",
+   "frames": 387,
+   "collisions": 3,
+   "stalls": 0,
+   "spl": 0.9369237356036533,
+   "min_clearance": 0.0,
+   "goal_dist": 83.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10003,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 210,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9981537906919697,
+   "min_clearance": 0.4,
+   "goal_dist": 96.7,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10004,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 353,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.407502691410313,
+   "min_clearance": 0.89,
+   "goal_dist": 45.3,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10005,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 126,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 1.6,
+   "goal_dist": 45.3,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10006,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 313,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 1.72,
+   "goal_dist": 114.9,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10007,
+   "scenario": "open",
+   "spawn": "uturn",
+   "status": "tipped",
+   "frames": 388,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0,
+   "min_clearance": 0.84,
+   "goal_dist": 142.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10008,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 357,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9471165041687652,
+   "min_clearance": 0.49,
+   "goal_dist": 85.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10009,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 416,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8627131071026682,
+   "min_clearance": 0.09,
+   "goal_dist": 142.4,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10010,
+   "scenario": "boulders",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 144,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8688407947866038,
+   "min_clearance": 0.83,
+   "goal_dist": 49.3,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10011,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 346,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8397802599428295,
+   "min_clearance": 0.31,
+   "goal_dist": 53.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10012,
+   "scenario": "wall",
+   "spawn": "recovery",
+   "status": "tipped",
+   "frames": 488,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0,
+   "min_clearance": 0.4,
+   "goal_dist": 86.0,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10013,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 332,
+   "collisions": 1,
+   "stalls": 0,
+   "spl": 0.9498771097866898,
+   "min_clearance": 0.04,
+   "goal_dist": 103.0,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10014,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 171,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.9,
+   "goal_dist": 90.3,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10015,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "tipped",
+   "frames": 55,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0,
+   "min_clearance": 6.59,
+   "goal_dist": 95.7,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10016,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "tipped",
+   "frames": 110,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0,
+   "min_clearance": 1.78,
+   "goal_dist": 88.4,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10017,
+   "scenario": "camp",
+   "spawn": "recovery",
+   "status": "reached",
+   "frames": 237,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.95,
+   "goal_dist": 69.9,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10018,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 233,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9863601747745313,
+   "min_clearance": 0.01,
+   "goal_dist": 82.0,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10019,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 396,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 1.02,
+   "goal_dist": 96.9,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10020,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 129,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.95,
+   "goal_dist": 52.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10021,
+   "scenario": "open",
+   "spawn": "recovery",
+   "status": "reached",
+   "frames": 160,
+   "collisions": 1,
+   "stalls": 0,
+   "spl": 0.8269113488615262,
+   "min_clearance": 0.07,
+   "goal_dist": 51.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10022,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 132,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 2.09,
+   "goal_dist": 49.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10023,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 338,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9825961100408966,
+   "min_clearance": 1.27,
+   "goal_dist": 118.3,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10024,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 334,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.4140544983704316,
+   "min_clearance": 0.08,
+   "goal_dist": 55.0,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10025,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 393,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9330625591079617,
+   "min_clearance": 0.18,
+   "goal_dist": 147.4,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10026,
+   "scenario": "wall",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 301,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.356072990526815,
+   "min_clearance": 1.2,
+   "goal_dist": 43.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10027,
+   "scenario": "open",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 123,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9248759252645754,
+   "min_clearance": 1.62,
+   "goal_dist": 50.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10028,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 235,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9855209567654283,
+   "min_clearance": 1.01,
+   "goal_dist": 82.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10029,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 381,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 1.38,
+   "goal_dist": 132.2,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10030,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 178,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.73,
+   "goal_dist": 55.0,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10031,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 575,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9723764872400537,
+   "min_clearance": 0.68,
+   "goal_dist": 137.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10032,
+   "scenario": "boulders",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 471,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8132909096208779,
+   "min_clearance": 0.47,
+   "goal_dist": 112.1,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10033,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "tipped",
+   "frames": 411,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0,
+   "min_clearance": 0.58,
+   "goal_dist": 96.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10034,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 330,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9891934131622133,
+   "min_clearance": 0.21,
+   "goal_dist": 131.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10035,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 528,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.729960364119341,
+   "min_clearance": 0.44,
+   "goal_dist": 108.7,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10036,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "tipped",
+   "frames": 780,
+   "collisions": 13,
+   "stalls": 0,
+   "spl": 0.0,
+   "min_clearance": 0.0,
+   "goal_dist": 106.3,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10037,
+   "scenario": "open",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 231,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9054793359560027,
+   "min_clearance": 0.7,
+   "goal_dist": 88.9,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10038,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 236,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.39,
+   "goal_dist": 42.1,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10039,
+   "scenario": "dense",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 239,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9679778469141366,
+   "min_clearance": 0.79,
+   "goal_dist": 107.4,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10040,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 151,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.75,
+   "goal_dist": 46.7,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10041,
+   "scenario": "wall",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 771,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.347481821027183,
+   "min_clearance": 0.26,
+   "goal_dist": 74.4,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10042,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 198,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8499545414824589,
+   "min_clearance": 0.67,
+   "goal_dist": 49.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10043,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 397,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9888960360710913,
+   "min_clearance": 1.11,
+   "goal_dist": 101.9,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10044,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 371,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9955871873134369,
+   "min_clearance": 1.16,
+   "goal_dist": 103.7,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10045,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 126,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.31,
+   "goal_dist": 45.7,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10046,
+   "scenario": "wall",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 252,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.7655819037155418,
+   "min_clearance": 1.1,
+   "goal_dist": 74.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10047,
+   "scenario": "open",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 156,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8473041705137339,
+   "min_clearance": 1.75,
+   "goal_dist": 43.7,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10048,
+   "scenario": "camp",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 210,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9459090939158531,
+   "min_clearance": 0.51,
+   "goal_dist": 75.7,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10049,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 417,
+   "collisions": 3,
+   "stalls": 0,
+   "spl": 0.9727092123137918,
+   "min_clearance": 0.0,
+   "goal_dist": 149.7,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10050,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 637,
+   "collisions": 3,
+   "stalls": 0,
+   "spl": 0.9429157111606428,
+   "min_clearance": 0.0,
+   "goal_dist": 145.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10051,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 225,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.977142546320807,
+   "min_clearance": 0.82,
+   "goal_dist": 62.4,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10052,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "tipped",
+   "frames": 28,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0,
+   "min_clearance": 2.24,
+   "goal_dist": 54.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10053,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 236,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9644289009337811,
+   "min_clearance": 0.4,
+   "goal_dist": 71.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10054,
+   "scenario": "camp",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 234,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9251699584397983,
+   "min_clearance": 2.04,
+   "goal_dist": 74.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10055,
+   "scenario": "camp",
+   "spawn": "recovery",
+   "status": "reached",
+   "frames": 243,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.7984540606479225,
+   "min_clearance": 0.37,
+   "goal_dist": 58.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10056,
+   "scenario": "boulders",
+   "spawn": "recovery",
+   "status": "tipped",
+   "frames": 32,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0,
+   "min_clearance": 0.34,
+   "goal_dist": 87.3,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10057,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 292,
+   "collisions": 2,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.0,
+   "goal_dist": 72.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10058,
+   "scenario": "dense",
+   "spawn": "uturn",
+   "status": "tipped",
+   "frames": 264,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0,
+   "min_clearance": 0.26,
+   "goal_dist": 86.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10059,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 149,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 1.53,
+   "goal_dist": 46.2,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10060,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 259,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9720329660155502,
+   "min_clearance": 0.66,
+   "goal_dist": 77.4,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10061,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 242,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.26,
+   "goal_dist": 72.7,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10062,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 351,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9489015693217041,
+   "min_clearance": 0.5,
+   "goal_dist": 84.4,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10063,
+   "scenario": "open",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 549,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8720684450706834,
+   "min_clearance": 0.82,
+   "goal_dist": 100.1,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10064,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 276,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 1.2,
+   "goal_dist": 89.7,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10065,
+   "scenario": "open",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 220,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.805282788479803,
+   "min_clearance": 0.68,
+   "goal_dist": 48.1,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10066,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 340,
+   "collisions": 6,
+   "stalls": 0,
+   "spl": 0.9774988319108283,
+   "min_clearance": 0.0,
+   "goal_dist": 96.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10067,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 258,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.49,
+   "goal_dist": 61.1,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10068,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 219,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9900051651674663,
+   "min_clearance": 0.97,
+   "goal_dist": 71.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10069,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 239,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9882062002461542,
+   "min_clearance": 0.16,
+   "goal_dist": 82.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10070,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 232,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 2.17,
+   "goal_dist": 86.7,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10071,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 364,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.6865821959096438,
+   "min_clearance": 0.34,
+   "goal_dist": 52.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10072,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 135,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 1.06,
+   "goal_dist": 62.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10073,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 142,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9963104412960608,
+   "min_clearance": 2.95,
+   "goal_dist": 70.1,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10074,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 160,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.11,
+   "goal_dist": 48.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10075,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 362,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9309148345019291,
+   "min_clearance": 0.86,
+   "goal_dist": 88.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10076,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 386,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 1.02,
+   "goal_dist": 80.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10077,
+   "scenario": "dense",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 207,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9101852981514611,
+   "min_clearance": 1.33,
+   "goal_dist": 61.0,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10078,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 199,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8512083910182355,
+   "min_clearance": 0.95,
+   "goal_dist": 46.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10079,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 421,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.7423927890932227,
+   "min_clearance": 0.49,
+   "goal_dist": 76.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10080,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 276,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 1.19,
+   "goal_dist": 109.3,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10081,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 344,
+   "collisions": 1,
+   "stalls": 0,
+   "spl": 0.991941417946445,
+   "min_clearance": 0.01,
+   "goal_dist": 91.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10082,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 248,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.8,
+   "goal_dist": 57.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10083,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 338,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 1.51,
+   "goal_dist": 100.0,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10084,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 186,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.6995238423814609,
+   "min_clearance": 0.99,
+   "goal_dist": 57.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10085,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 167,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.24,
+   "goal_dist": 70.4,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10086,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "tipped",
+   "frames": 1182,
+   "collisions": 7,
+   "stalls": 50,
+   "spl": 0.0,
+   "min_clearance": 0.0,
+   "goal_dist": 66.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10087,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 438,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9819789896425701,
+   "min_clearance": 0.64,
+   "goal_dist": 105.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10088,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "tipped",
+   "frames": 321,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0,
+   "min_clearance": 0.79,
+   "goal_dist": 105.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10089,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 332,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.6169949121468942,
+   "min_clearance": 0.41,
+   "goal_dist": 52.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10090,
+   "scenario": "boulders",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 305,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.7633248877742411,
+   "min_clearance": 0.65,
+   "goal_dist": 94.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10091,
+   "scenario": "open",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 104,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8805824713405864,
+   "min_clearance": 3.66,
+   "goal_dist": 43.3,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10092,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 504,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.4814184762760595,
+   "min_clearance": 0.76,
+   "goal_dist": 57.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10093,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 203,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.732661824666722,
+   "min_clearance": 1.13,
+   "goal_dist": 46.3,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10094,
+   "scenario": "camp",
+   "spawn": "recovery",
+   "status": "reached",
+   "frames": 245,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8985642863786956,
+   "min_clearance": 0.9,
+   "goal_dist": 88.3,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10095,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 124,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 1.4,
+   "goal_dist": 48.3,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10096,
+   "scenario": "open",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 240,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9305098034674532,
+   "min_clearance": 0.27,
+   "goal_dist": 83.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10097,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 266,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9592272730929102,
+   "min_clearance": 1.12,
+   "goal_dist": 81.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10098,
+   "scenario": "dense",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 254,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9181248547796113,
+   "min_clearance": 0.3,
+   "goal_dist": 56.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10099,
+   "scenario": "dense",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 271,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9160322071302817,
+   "min_clearance": 1.29,
+   "goal_dist": 88.2,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10100,
+   "scenario": "wall",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 478,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.4145115313916001,
+   "min_clearance": 0.54,
+   "goal_dist": 54.2,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10101,
+   "scenario": "camp",
+   "spawn": "recovery",
+   "status": "reached",
+   "frames": 389,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8355282939190116,
+   "min_clearance": 0.71,
+   "goal_dist": 104.7,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10102,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "tipped",
+   "frames": 408,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0,
+   "min_clearance": 1.36,
+   "goal_dist": 87.0,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10103,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 499,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8125626300972707,
+   "min_clearance": 0.64,
+   "goal_dist": 137.2,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10104,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 283,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9436414824687689,
+   "min_clearance": 0.42,
+   "goal_dist": 103.9,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10105,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 173,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 1.44,
+   "goal_dist": 50.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10106,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 206,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.7776797688409848,
+   "min_clearance": 1.02,
+   "goal_dist": 62.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10107,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 196,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9801335545777323,
+   "min_clearance": 2.19,
+   "goal_dist": 74.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10108,
+   "scenario": "wall",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 722,
+   "collisions": 4,
+   "stalls": 0,
+   "spl": 0.7823781233799262,
+   "min_clearance": 0.04,
+   "goal_dist": 103.4,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10109,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 188,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9984118972093119,
+   "min_clearance": 1.76,
+   "goal_dist": 51.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10110,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 249,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 1.0,
+   "goal_dist": 63.0,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10111,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 97,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 2.47,
+   "goal_dist": 40.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10112,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 119,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 1.83,
+   "goal_dist": 47.1,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10113,
+   "scenario": "open",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 414,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.6340598177381797,
+   "min_clearance": 0.4,
+   "goal_dist": 71.2,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10114,
+   "scenario": "dense",
+   "spawn": "recovery",
+   "status": "reached",
+   "frames": 192,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.856945782175253,
+   "min_clearance": 0.73,
+   "goal_dist": 55.9,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10115,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 379,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.98432758769423,
+   "min_clearance": 1.08,
+   "goal_dist": 97.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10116,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 246,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9393110042390207,
+   "min_clearance": 1.22,
+   "goal_dist": 87.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10117,
+   "scenario": "dense",
+   "spawn": "recovery",
+   "status": "reached",
+   "frames": 409,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8051570878695719,
+   "min_clearance": 0.27,
+   "goal_dist": 105.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10118,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 468,
+   "collisions": 1,
+   "stalls": 0,
+   "spl": 0.957004021199192,
+   "min_clearance": 0.0,
+   "goal_dist": 140.9,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10119,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 382,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9780773956039777,
+   "min_clearance": 0.29,
+   "goal_dist": 103.2,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10120,
+   "scenario": "boulders",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 167,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9260328128320553,
+   "min_clearance": 0.43,
+   "goal_dist": 41.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10121,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 502,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.95432034605301,
+   "min_clearance": 0.43,
+   "goal_dist": 92.0,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10122,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 132,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 1.52,
+   "goal_dist": 48.7,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10123,
+   "scenario": "dense",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 234,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.835765434147466,
+   "min_clearance": 1.26,
+   "goal_dist": 47.3,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10124,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 237,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.7942550149358147,
+   "min_clearance": 0.44,
+   "goal_dist": 57.9,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10125,
+   "scenario": "wall",
+   "spawn": "recovery",
+   "status": "reached",
+   "frames": 638,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.3089126960264068,
+   "min_clearance": 0.3,
+   "goal_dist": 47.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10126,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "tipped",
+   "frames": 180,
+   "collisions": 2,
+   "stalls": 0,
+   "spl": 0.0,
+   "min_clearance": 0.01,
+   "goal_dist": 73.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10127,
+   "scenario": "boulders",
+   "spawn": "recovery",
+   "status": "reached",
+   "frames": 354,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8930002406156464,
+   "min_clearance": 0.93,
+   "goal_dist": 68.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10128,
+   "scenario": "wall",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 404,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8099892250980909,
+   "min_clearance": 0.0,
+   "goal_dist": 82.0,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10129,
+   "scenario": "camp",
+   "spawn": "recovery",
+   "status": "reached",
+   "frames": 357,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.89,
+   "goal_dist": 102.9,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10130,
+   "scenario": "camp",
+   "spawn": "recovery",
+   "status": "reached",
+   "frames": 295,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.7770653690897336,
+   "min_clearance": 0.73,
+   "goal_dist": 90.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10131,
+   "scenario": "dense",
+   "spawn": "recovery",
+   "status": "reached",
+   "frames": 172,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.65,
+   "goal_dist": 55.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10132,
+   "scenario": "wall",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 515,
+   "collisions": 6,
+   "stalls": 0,
+   "spl": 0.47344148346465204,
+   "min_clearance": 0.0,
+   "goal_dist": 86.2,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10133,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 177,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9637208824074053,
+   "min_clearance": 2.02,
+   "goal_dist": 75.4,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10134,
+   "scenario": "dense",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 239,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.4,
+   "goal_dist": 76.6,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10135,
+   "scenario": "wall",
+   "spawn": "recovery",
+   "status": "reached",
+   "frames": 280,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.5071824648517741,
+   "min_clearance": 0.26,
+   "goal_dist": 42.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10136,
+   "scenario": "camp",
+   "spawn": "recovery",
+   "status": "reached",
+   "frames": 341,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9163280376824974,
+   "min_clearance": 1.17,
+   "goal_dist": 90.4,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10137,
+   "scenario": "open",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 183,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9056129506287646,
+   "min_clearance": 2.02,
+   "goal_dist": 47.2,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10138,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 137,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 2.25,
+   "goal_dist": 63.1,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10139,
+   "scenario": "camp",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 88,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 1.85,
+   "goal_dist": 43.5,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10140,
+   "scenario": "open",
+   "spawn": "recovery",
+   "status": "reached",
+   "frames": 288,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8798584750820408,
+   "min_clearance": 0.78,
+   "goal_dist": 71.1,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10141,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 357,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9865486185422165,
+   "min_clearance": 0.88,
+   "goal_dist": 90.7,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10142,
+   "scenario": "boulders",
+   "spawn": "normal",
+   "status": "reached",
+   "frames": 216,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0,
+   "min_clearance": 0.54,
+   "goal_dist": 50.8,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  },
+  {
+   "seed": 10143,
+   "scenario": "boulders",
+   "spawn": "uturn",
+   "status": "reached",
+   "frames": 631,
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8691984221606948,
+   "min_clearance": 0.4,
+   "goal_dist": 107.3,
+   "camera": {
+    "hfov": 70.0,
+    "h": 2.0,
+    "pitch": -15.0,
+    "roll": 0.0,
+    "size": [
+     640,
+     480
+    ]
+   }
+  }
+ ]
+}

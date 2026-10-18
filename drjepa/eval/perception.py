@@ -175,7 +175,11 @@ def main():
     ap.add_argument("--checkpoint", default=None, help="GeoBEV checkpoint")
     ap.add_argument("--teacher", default=None, choices=["Small", "Base"],
                     help="score the Depth Anything V2 teacher instead")
-    ap.add_argument("--episodes", nargs="+", required=True)
+    ap.add_argument("--episodes", nargs="*", default=[], help="episodes scored one by one")
+    ap.add_argument("--sim_val", default=None,
+                    help="also score the held-out split of this sim data root jointly "
+                         "(the training validation episodes; includes steep-slope metrics)")
+    ap.add_argument("--max_episodes", type=int, default=60, help="cap for --sim_val")
     ap.add_argument("--stride", type=int, default=2)
     ap.add_argument("--square_crop", action="store_true",
                     help="only score cells inside the centred square crop's view")
@@ -193,8 +197,16 @@ def main():
         from ..perception.infer import Perceiver
         method = Perceiver(a.checkpoint).benchmark_method()
         name = a.checkpoint
+    if not a.episodes and not a.sim_val:
+        ap.error("give --episodes and/or --sim_val")
     mask = square_crop_mask if a.square_crop else None
     results = {}
+    if a.sim_val:
+        from ..perception.train import sim_split
+        eps = [Episode(e) for e in sim_split(a.sim_val)[1][:a.max_episodes]]
+        r = evaluate(method, eps, stride=a.stride, extra_mask=mask)
+        results["sim_val"] = r
+        print(format_table(f"{name} | sim val ({len(eps)} episodes)", r), flush=True)
     for e in a.episodes:
         ep = Episode(e)
         r = evaluate(method, [ep], stride=a.stride, extra_mask=mask)

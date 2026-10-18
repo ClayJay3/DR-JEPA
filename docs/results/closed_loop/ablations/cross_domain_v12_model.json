@@ -1,0 +1,1205 @@
+{
+ "summary": {
+  "n": 144,
+  "success": 0.7569444444444444,
+  "tipped": 0.1111111111111111,
+  "no_progress": 0.13194444444444445,
+  "timeout": 0.0,
+  "collision_free": 0.1527777777777778,
+  "contacts_per_ep": 14.25,
+  "stalls_per_ep": 0.0,
+  "spl": 0.6092438378733074,
+  "by_scenario": {
+   "boulders": {
+    "n": 25,
+    "success": 0.76,
+    "tipped": 0.12,
+    "contacts": 16.72,
+    "spl": 0.6318078222869604
+   },
+   "camp": {
+    "n": 28,
+    "success": 0.7142857142857143,
+    "tipped": 0.21428571428571427,
+    "contacts": 7.321428571428571,
+    "spl": 0.6043883249769336
+   },
+   "dense": {
+    "n": 30,
+    "success": 0.9333333333333333,
+    "tipped": 0.06666666666666667,
+    "contacts": 8.4,
+    "spl": 0.724449679780091
+   },
+   "open": {
+    "n": 26,
+    "success": 0.9615384615384616,
+    "tipped": 0.0,
+    "contacts": 7.230769230769231,
+    "spl": 0.8441418719205797
+   },
+   "wall": {
+    "n": 35,
+    "success": 0.4857142857142857,
+    "tipped": 0.14285714285714285,
+    "contacts": 28.257142857142856,
+    "spl": 0.32376756953972274
+   }
+  },
+  "wall_s": 1592.3556723594666
+ },
+ "episodes": [
+  {
+   "seed": 20000,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9870383967852953
+  },
+  {
+   "seed": 20004,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 12,
+   "stalls": 0,
+   "spl": 0.8442386574998063
+  },
+  {
+   "seed": 20008,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 21,
+   "stalls": 0,
+   "spl": 0.23199550493802057
+  },
+  {
+   "seed": 20012,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 24,
+   "stalls": 0,
+   "spl": 0.3784482778124948
+  },
+  {
+   "seed": 20016,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 7,
+   "stalls": 0,
+   "spl": 0.5341630298698768
+  },
+  {
+   "seed": 20020,
+   "scenario": "camp",
+   "status": "no_progress",
+   "collisions": 36,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20024,
+   "scenario": "open",
+   "status": "no_progress",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20028,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 2,
+   "stalls": 0,
+   "spl": 0.8351521249606432
+  },
+  {
+   "seed": 20032,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 9,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20036,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 11,
+   "stalls": 0,
+   "spl": 0.8694016821515593
+  },
+  {
+   "seed": 20040,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 28,
+   "stalls": 0,
+   "spl": 0.7529761504244181
+  },
+  {
+   "seed": 20044,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 14,
+   "stalls": 0,
+   "spl": 0.9601477302813113
+  },
+  {
+   "seed": 20048,
+   "scenario": "wall",
+   "status": "tipped",
+   "collisions": 13,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20052,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 6,
+   "stalls": 0,
+   "spl": 0.8929806763528195
+  },
+  {
+   "seed": 20056,
+   "scenario": "wall",
+   "status": "tipped",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20060,
+   "scenario": "boulders",
+   "status": "no_progress",
+   "collisions": 36,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20064,
+   "scenario": "wall",
+   "status": "no_progress",
+   "collisions": 45,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20068,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 4,
+   "stalls": 0,
+   "spl": 0.43572706340485723
+  },
+  {
+   "seed": 20072,
+   "scenario": "wall",
+   "status": "tipped",
+   "collisions": 2,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20076,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.5635298634099741
+  },
+  {
+   "seed": 20080,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8650234663875624
+  },
+  {
+   "seed": 20084,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 12,
+   "stalls": 0,
+   "spl": 0.8631190340781466
+  },
+  {
+   "seed": 20088,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 14,
+   "stalls": 0,
+   "spl": 0.9132949300684191
+  },
+  {
+   "seed": 20092,
+   "scenario": "camp",
+   "status": "tipped",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20096,
+   "scenario": "wall",
+   "status": "no_progress",
+   "collisions": 38,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20100,
+   "scenario": "wall",
+   "status": "tipped",
+   "collisions": 8,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20104,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20108,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 14,
+   "stalls": 0,
+   "spl": 0.6073245444246352
+  },
+  {
+   "seed": 20112,
+   "scenario": "wall",
+   "status": "no_progress",
+   "collisions": 46,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20116,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 6,
+   "stalls": 0,
+   "spl": 0.9405201150483781
+  },
+  {
+   "seed": 20120,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 4,
+   "stalls": 0,
+   "spl": 0.9179275602176326
+  },
+  {
+   "seed": 20124,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 11,
+   "stalls": 0,
+   "spl": 0.949366885928684
+  },
+  {
+   "seed": 20128,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 24,
+   "stalls": 0,
+   "spl": 0.8325842406460583
+  },
+  {
+   "seed": 20132,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 4,
+   "stalls": 0,
+   "spl": 0.6049022770719168
+  },
+  {
+   "seed": 20136,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 17,
+   "stalls": 0,
+   "spl": 0.711748092481992
+  },
+  {
+   "seed": 20140,
+   "scenario": "wall",
+   "status": "no_progress",
+   "collisions": 44,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20001,
+   "scenario": "boulders",
+   "status": "tipped",
+   "collisions": 7,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20005,
+   "scenario": "dense",
+   "status": "tipped",
+   "collisions": 5,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20009,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 48,
+   "stalls": 0,
+   "spl": 0.36829752585589537
+  },
+  {
+   "seed": 20013,
+   "scenario": "wall",
+   "status": "no_progress",
+   "collisions": 32,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20017,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 13,
+   "stalls": 0,
+   "spl": 0.7696403286392403
+  },
+  {
+   "seed": 20021,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 12,
+   "stalls": 0,
+   "spl": 0.7188976619079049
+  },
+  {
+   "seed": 20025,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 8,
+   "stalls": 0,
+   "spl": 0.8869176937626897
+  },
+  {
+   "seed": 20029,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 5,
+   "stalls": 0,
+   "spl": 0.49824639261186293
+  },
+  {
+   "seed": 20033,
+   "scenario": "boulders",
+   "status": "no_progress",
+   "collisions": 44,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20037,
+   "scenario": "wall",
+   "status": "no_progress",
+   "collisions": 30,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20041,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 4,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20045,
+   "scenario": "camp",
+   "status": "tipped",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20049,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 64,
+   "stalls": 0,
+   "spl": 0.40367239704699215
+  },
+  {
+   "seed": 20053,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.8371947838962466
+  },
+  {
+   "seed": 20057,
+   "scenario": "wall",
+   "status": "no_progress",
+   "collisions": 31,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20061,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 16,
+   "stalls": 0,
+   "spl": 0.41417300506320737
+  },
+  {
+   "seed": 20065,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 8,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20069,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 27,
+   "stalls": 0,
+   "spl": 0.5005388605415648
+  },
+  {
+   "seed": 20073,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 9,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20077,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 4,
+   "stalls": 0,
+   "spl": 0.9052132267523053
+  },
+  {
+   "seed": 20081,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20085,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 25,
+   "stalls": 0,
+   "spl": 0.9037288064190313
+  },
+  {
+   "seed": 20089,
+   "scenario": "wall",
+   "status": "no_progress",
+   "collisions": 38,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20093,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9084759446594836
+  },
+  {
+   "seed": 20097,
+   "scenario": "camp",
+   "status": "tipped",
+   "collisions": 4,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20101,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 8,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20105,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 11,
+   "stalls": 0,
+   "spl": 0.870286425197919
+  },
+  {
+   "seed": 20109,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 1,
+   "stalls": 0,
+   "spl": 0.9814298319917611
+  },
+  {
+   "seed": 20113,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 20,
+   "stalls": 0,
+   "spl": 0.7908339432717439
+  },
+  {
+   "seed": 20117,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 4,
+   "stalls": 0,
+   "spl": 0.9863689208784608
+  },
+  {
+   "seed": 20121,
+   "scenario": "wall",
+   "status": "no_progress",
+   "collisions": 52,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20125,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 12,
+   "stalls": 0,
+   "spl": 0.8978095357635363
+  },
+  {
+   "seed": 20129,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 14,
+   "stalls": 0,
+   "spl": 0.9515564596352979
+  },
+  {
+   "seed": 20133,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 3,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20137,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20141,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 7,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20002,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9398380210011674
+  },
+  {
+   "seed": 20006,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 11,
+   "stalls": 0,
+   "spl": 0.5003101053907814
+  },
+  {
+   "seed": 20010,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 2,
+   "stalls": 0,
+   "spl": 0.6981442526505327
+  },
+  {
+   "seed": 20014,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 3,
+   "stalls": 0,
+   "spl": 0.9971743631281442
+  },
+  {
+   "seed": 20018,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 14,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20022,
+   "scenario": "wall",
+   "status": "no_progress",
+   "collisions": 35,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20026,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 19,
+   "stalls": 0,
+   "spl": 0.9298853932548208
+  },
+  {
+   "seed": 20030,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 4,
+   "stalls": 0,
+   "spl": 0.7652040215182554
+  },
+  {
+   "seed": 20034,
+   "scenario": "camp",
+   "status": "tipped",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20038,
+   "scenario": "boulders",
+   "status": "tipped",
+   "collisions": 48,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20042,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 9,
+   "stalls": 0,
+   "spl": 0.9557137147653375
+  },
+  {
+   "seed": 20046,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 31,
+   "stalls": 0,
+   "spl": 0.6293819598564467
+  },
+  {
+   "seed": 20050,
+   "scenario": "wall",
+   "status": "no_progress",
+   "collisions": 59,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20054,
+   "scenario": "dense",
+   "status": "tipped",
+   "collisions": 4,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20058,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 5,
+   "stalls": 0,
+   "spl": 0.7910682639537907
+  },
+  {
+   "seed": 20062,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 14,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20066,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 14,
+   "stalls": 0,
+   "spl": 0.9842943346229788
+  },
+  {
+   "seed": 20070,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 3,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20074,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 4,
+   "stalls": 0,
+   "spl": 0.9523797371841565
+  },
+  {
+   "seed": 20078,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9660719509643186
+  },
+  {
+   "seed": 20082,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 4,
+   "stalls": 0,
+   "spl": 0.8619787253825614
+  },
+  {
+   "seed": 20086,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 8,
+   "stalls": 0,
+   "spl": 0.9910229204294609
+  },
+  {
+   "seed": 20090,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 34,
+   "stalls": 0,
+   "spl": 0.46658872453640843
+  },
+  {
+   "seed": 20094,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 13,
+   "stalls": 0,
+   "spl": 0.8894547905395909
+  },
+  {
+   "seed": 20098,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 33,
+   "stalls": 0,
+   "spl": 0.739396185303246
+  },
+  {
+   "seed": 20102,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 11,
+   "stalls": 0,
+   "spl": 0.9459907923319429
+  },
+  {
+   "seed": 20106,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 3,
+   "stalls": 0,
+   "spl": 0.9024272853024023
+  },
+  {
+   "seed": 20110,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 5,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20114,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 15,
+   "stalls": 0,
+   "spl": 0.7522393342383502
+  },
+  {
+   "seed": 20118,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 3,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20122,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 11,
+   "stalls": 0,
+   "spl": 0.9637844992246289
+  },
+  {
+   "seed": 20126,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 3,
+   "stalls": 0,
+   "spl": 0.9930571515833417
+  },
+  {
+   "seed": 20130,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 3,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20134,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 4,
+   "stalls": 0,
+   "spl": 0.8573887687365054
+  },
+  {
+   "seed": 20138,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 19,
+   "stalls": 0,
+   "spl": 0.4962500076472522
+  },
+  {
+   "seed": 20142,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 15,
+   "stalls": 0,
+   "spl": 0.2894467248595024
+  },
+  {
+   "seed": 20003,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 71,
+   "stalls": 0,
+   "spl": 0.1711643853755675
+  },
+  {
+   "seed": 20007,
+   "scenario": "wall",
+   "status": "no_progress",
+   "collisions": 35,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20011,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 9,
+   "stalls": 0,
+   "spl": 0.9771703654312088
+  },
+  {
+   "seed": 20015,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 8,
+   "stalls": 0,
+   "spl": 0.9788902070273852
+  },
+  {
+   "seed": 20019,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.5041457429772411
+  },
+  {
+   "seed": 20023,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 7,
+   "stalls": 0,
+   "spl": 0.7972064788138543
+  },
+  {
+   "seed": 20027,
+   "scenario": "wall",
+   "status": "no_progress",
+   "collisions": 42,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20031,
+   "scenario": "boulders",
+   "status": "tipped",
+   "collisions": 2,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20035,
+   "scenario": "boulders",
+   "status": "no_progress",
+   "collisions": 31,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20039,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 7,
+   "stalls": 0,
+   "spl": 0.8005556882521571
+  },
+  {
+   "seed": 20043,
+   "scenario": "camp",
+   "status": "no_progress",
+   "collisions": 38,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20047,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 40,
+   "stalls": 0,
+   "spl": 0.5039526762943043
+  },
+  {
+   "seed": 20051,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 6,
+   "stalls": 0,
+   "spl": 0.9344380092468058
+  },
+  {
+   "seed": 20055,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 9,
+   "stalls": 0,
+   "spl": 0.9412285795395031
+  },
+  {
+   "seed": 20059,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.9512590883697906
+  },
+  {
+   "seed": 20063,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 1,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20067,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 7,
+   "stalls": 0,
+   "spl": 0.24010427054422195
+  },
+  {
+   "seed": 20071,
+   "scenario": "open",
+   "status": "reached",
+   "collisions": 4,
+   "stalls": 0,
+   "spl": 0.5979697178984745
+  },
+  {
+   "seed": 20075,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 19,
+   "stalls": 0,
+   "spl": 0.5717151044794793
+  },
+  {
+   "seed": 20079,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 13,
+   "stalls": 0,
+   "spl": 0.5297574465153623
+  },
+  {
+   "seed": 20083,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 6,
+   "stalls": 0,
+   "spl": 0.9907617069115061
+  },
+  {
+   "seed": 20087,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 8,
+   "stalls": 0,
+   "spl": 0.863529191287117
+  },
+  {
+   "seed": 20091,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 9,
+   "stalls": 0,
+   "spl": 0.9066270789013879
+  },
+  {
+   "seed": 20095,
+   "scenario": "boulders",
+   "status": "reached",
+   "collisions": 19,
+   "stalls": 0,
+   "spl": 0.9506418236283221
+  },
+  {
+   "seed": 20099,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 29,
+   "stalls": 0,
+   "spl": 0.7961544072232104
+  },
+  {
+   "seed": 20103,
+   "scenario": "wall",
+   "status": "tipped",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20107,
+   "scenario": "camp",
+   "status": "tipped",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0
+  },
+  {
+   "seed": 20111,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20115,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 3,
+   "stalls": 0,
+   "spl": 1.0
+  },
+  {
+   "seed": 20119,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 11,
+   "stalls": 0,
+   "spl": 0.7567965793663666
+  },
+  {
+   "seed": 20123,
+   "scenario": "wall",
+   "status": "reached",
+   "collisions": 51,
+   "stalls": 0,
+   "spl": 0.6271113733232744
+  },
+  {
+   "seed": 20127,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 4,
+   "stalls": 0,
+   "spl": 0.8089362422704467
+  },
+  {
+   "seed": 20131,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 7,
+   "stalls": 0,
+   "spl": 0.9476017802646043
+  },
+  {
+   "seed": 20135,
+   "scenario": "dense",
+   "status": "reached",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.7363494912948718
+  },
+  {
+   "seed": 20139,
+   "scenario": "camp",
+   "status": "reached",
+   "collisions": 15,
+   "stalls": 0,
+   "spl": 0.5036611419742193
+  },
+  {
+   "seed": 20143,
+   "scenario": "camp",
+   "status": "tipped",
+   "collisions": 0,
+   "stalls": 0,
+   "spl": 0.0
+  }
+ ]
+}

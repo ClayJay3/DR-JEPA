@@ -1,7 +1,11 @@
 # Benchmarks
 
 Every number here is reproducible with `tools/run_benchmarks.sh` and the
-commands quoted per section. Hardware: RTX 4080 SUPER, Ryzen 9 7950X.
+commands quoted per section, and the raw results (per-episode for driving,
+per-range-band for perception) are in [results/](results/README.md).
+Hardware: RTX 4080 SUPER, Ryzen 9 7950X. The default model is published as
+`models/geobev.pt` / `models/geobev.onnx`; results files call it
+`runs/geobev/best.pt`.
 
 **Protocol.** Closed-loop results use 144 unseen simulator worlds (seeds
 10000-10143, all five scenario types, ~40-150 m goals) with a *different
@@ -50,7 +54,7 @@ best. The v12 row is the previous shipping model on the previous simulator
 (same protocol, same seeds); its own expert scored 98.6 % there, so both
 worlds are equally solvable.
 
-`python -m drjepa eval-drive --policy model --checkpoint runs/geobev/best.pt --episodes 144`
+`python -m drjepa eval-drive --policy model --checkpoint models/geobev.pt --episodes 144` (add `--camera zed` etc. for a pinned rig, `--policy oracle` / `expert` for the references)
 
 ### Cross-domain: a world that looks different
 
@@ -107,6 +111,8 @@ under-estimation (it tips you; over-estimation costs a detour) triples
 recall at the planner's threshold for a 0.3 % false-alarm rate on flat
 ground. Lowering the threshold on the unfixed model instead (0.35: 50 %
 recall) flags a quarter of drivable 0.30-0.45 slopes as lethal.
+
+`python -m drjepa eval-perception --checkpoint X --sim_val data/sim --stride 4`
 
 **Every remaining tip is a roll-over.** With the A2 head, all nine tips
 had a side-slope of 0.51-0.58 (limit 0.50) while pitch stayed moderate, and
@@ -198,6 +204,9 @@ finding as the v9 oracle study.
 
 ## 4. Monocular depth at rover height (why the teacher is aligned to the ground)
 
+*One-off study (not a maintained benchmark); the teacher itself is
+`drjepa/perception/teacher.py` and is scored by `eval-perception --teacher Base`.*
+
 AbsRel vs ZED stereo on 40 frames of a held-out recording (camera 0.39 m).
 "Mount-plane affine" fits inverse depth = a * prediction + b on near-ground
 pixels using only the known mount height -- deployable on any robot.
@@ -216,6 +225,9 @@ robot's own ground plane is excellent near and degrades with range.
 ---
 
 ## 5. Simulator realism
+
+*One-off study (not a maintained benchmark); the v12 renderer it compares
+against is in git history.*
 
 Frechet distance between DINOv3 ViT-S feature distributions of 800 real ZED
 frames and 800 simulator frames (FID recipe, lower = closer to real), and
@@ -241,16 +253,20 @@ Ryzen 9 7950X for CPU numbers.
 | stage | GPU (RTX 4080, PyTorch fp32) | CPU (ONNX Runtime) |
 |---|---:|---:|
 | perception, GeoBEV-B0 (F) -- network only | 3.0 ms | 18.7 ms (4 threads), 57 ms (1 thread) |
-| perception, GeoBEV-B0 (F) -- per call, incl. resize + copies | 4.5 ms | 20.5 ms (4 threads), 59 ms (1 thread) |
+| perception, GeoBEV-B0 (F) -- per call, incl. resize + copies | 4.5 ms | 20.6 ms (4 threads), 58 ms (1 thread) |
 | perception, GeoBEV-DINOv3 (D2) -- per call | 6.3 ms | 70 ms (16 threads), 93 ms (4), 312 ms (1) |
 | belief-map fusion | 1.0 ms | 1.0 ms |
-| A* planning (every 3rd step, amortized) | 1.6 ms | 1.6 ms |
+| A* planning to a 60 m goal (every 3rd step, amortized) | 2.0 ms | 2.0 ms |
 | arc control | 0.2 ms | 0.2 ms |
-| **full `Navigator.step`, median (p95)** | **6.0 ms (11.5 ms)** | **22 ms (28 ms)**, 4 threads |
+| **full `Navigator.step`, median (p95)** | **5.9 ms (11.9 ms)** | **22 ms (29 ms)**, 4 threads |
 
 fp16 autocast is *slower* at batch 1 on this GPU (B0 5.9 ms, DINOv3 7.6 ms
 per call), so `Perceiver` defaults to fp32; for embedded fp16 / int8 use
 the ONNX file with TensorRT. ONNX vs PyTorch outputs agree to 4e-5 (B0)
 and 5e-5 (DINOv3). For the small model on CPU pass `threads=4` to
 `OnnxPerceiver`: ONNX Runtime's default (one thread per core) is slower
-(23 ms) with a long tail (step p95 51 ms).
+(26 ms per call, p95 43 ms).
+
+`python -m drjepa bench-latency --checkpoint models/geobev.pt --onnx models/geobev.onnx --recording "recordings/zed/ZED_2i_31237348_(1)"`
+(B0 rows; network-only CPU numbers from `export --verify`; the DINOv3 row
+was measured the same way on `runs/geobev_dino`).

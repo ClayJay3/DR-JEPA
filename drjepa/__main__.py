@@ -6,6 +6,7 @@
     eval-perception open-loop perception benchmark on labelled episodes
     eval-drive      closed-loop driving benchmark in the simulator
     export          export a checkpoint to ONNX (+ verify, + CPU latency)
+    bench-latency   isolated perception + Navigator.step latency (GPU and CPU)
 
 The endless driving demo is ./demo.py at the repo root.
 
@@ -22,6 +23,7 @@ COMMANDS = {
     "eval-perception": "drjepa.eval.perception",
     "eval-drive": "drjepa.eval.closed_loop",
     "export": "drjepa.perception.export",
+    "bench-latency": "drjepa.eval.latency",
 }
 
 

@@ -29,12 +29,17 @@ profile (footprint, step height, slope limits) decides what is blocking.
 | closed loop, 144 unseen worlds, random camera rigs | **93.8 % success** (perfect perception, same stack: 94.4 %) |
 | held-out real site (Hanksville, ZED 2i stereo truth) | obstacle AUC **0.95** at 0-6 m (a large monocular depth model: 0.70) |
 
-There are two trained models (`runs/`, not tracked by git): `geobev`
-(EfficientNet-B0, distilled; the default) and `geobev_dino` (frozen DINOv3
-ViT-S, 25 M parameters, 6 ms on a GPU; the most accurate on real terrain).
+**The trained default model ships in `models/`** (`geobev.onnx` + its
+manifest, and the `geobev.pt` checkpoint; Git LFS, so run `git lfs pull`
+after cloning). It is EfficientNet-B0 distilled from a frozen-DINOv3 model.
+That larger model (`geobev_dino`: 25 M parameters, 6 ms on a GPU, the most
+accurate on real terrain) is not published because it embeds Meta's DINOv3
+weights, which have their own license; training step 3a below reproduces it.
+
 Results, methodology and the honest gaps are in
-[docs/benchmarks.md](docs/benchmarks.md); why it is built this way (and what
-was tried and measured worse) is in [docs/design.md](docs/design.md).
+[docs/benchmarks.md](docs/benchmarks.md) (raw per-episode results in
+[docs/results/](docs/results/README.md)); why it is built this way (and
+what was tried and measured worse) is in [docs/design.md](docs/design.md).
 
 ---
 
@@ -91,7 +96,7 @@ camera = Camera(width=1280, height=720, fx=522.6, fy=522.6, cx=634.7, cy=352.1, 
                 mount_roll=0.0)         # deg
 robot = RobotProfile(radius=0.75, v_max=2.0, yaw_rate_max=70.0, step_height=0.25,
                      grade_drive=0.35, grade_block=0.55, tip_roll=0.50, tip_pitch=0.70)
-nav = Navigator("geobev.onnx", camera=camera, robot=robot)   # .onnx -> no torch needed
+nav = Navigator("models/geobev.onnx", camera=camera, robot=robot)   # .onnx -> no torch needed
 
 while True:
     rgb = grab_frame()                                  # (H, W, 3) uint8 RGB
@@ -115,7 +120,8 @@ while True:
   right at `yaw_rate_max`; `throttle` is a fraction of top speed.
 - **Rate.** The controller assumes 10 Hz (`NavConfig.dt`).
 
-Export once, run anywhere ONNX Runtime runs (CPU, CUDA, TensorRT):
+`models/geobev.onnx` runs anywhere ONNX Runtime runs (CPU, CUDA, TensorRT).
+Export your own checkpoints the same way:
 
 ```bash
 python -m drjepa export --checkpoint runs/geobev/best.pt --out geobev.onnx --verify
@@ -128,7 +134,7 @@ default measured slower with a long latency tail:
 
 ```python
 from drjepa.perception.onnx_runtime import OnnxPerceiver
-nav = Navigator(OnnxPerceiver("geobev.onnx", threads=4), camera=camera, robot=robot)
+nav = Navigator(OnnxPerceiver("models/geobev.onnx", threads=4), camera=camera, robot=robot)
 ```
 
 ---
@@ -136,14 +142,15 @@ nav = Navigator(OnnxPerceiver("geobev.onnx", threads=4), camera=camera, robot=ro
 ## Quick start
 
 ```bash
+git clone git@github.com:ClayJay3/DR-JEPA.git && cd DR-JEPA && git lfs pull   # models/
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[sim,export,dev]"        # + ".[teacher]" for the depth teacher / DINOv3
 pytest                                    # 25 tests, ~1 min
 
-python demo.py --checkpoint runs/geobev/best.pt --camera zed            # endless drive + HUD video
-python dashboard.py --checkpoint runs/geobev/best.pt --scenario camp    # diagnostics dashboard
-python dashboard.py --checkpoint runs/geobev/best.pt \
-    --replay "recordings/zed/ZED_2i_39163798_(1)"                       # replay a real recording
+python demo.py --checkpoint models/geobev.pt --camera zed               # endless drive + HUD video
+python dashboard.py --checkpoint models/geobev.pt --scenario camp       # diagnostics dashboard
+python dashboard.py --checkpoint models/geobev.pt \
+    --replay "recordings/zed/ZED_2i_39163798_(1)"     # replay a labelled real recording (your own)
 ```
 
 ![real replay](docs/images/dashboard_real.jpg)
@@ -248,13 +255,15 @@ drjepa/
   nav/               belief map, A* planner, arc controller, Navigator API
   sim/               GPU renderer, worlds, rover physics, expert, data generation
   data/recordings.py real ZED recordings -> labelled episodes
-  eval/              open-loop perception and closed-loop driving benchmarks
+  eval/              perception, closed-loop driving and latency benchmarks
   viz/               dashboard + HUD (fonts vendored)
+models/              published default model: geobev.onnx + .json manifest, geobev.pt (Git LFS)
 tools/zed/           ZED SDK container + SVO exporter
 tools/run_benchmarks.sh
+examples/zed_live.py live loop on a ZED 2i (exact camera pose from its tracking)
 demo.py              endless closed-loop demo video
 dashboard.py         diagnostics dashboard (sim or real replay)
-docs/                benchmarks.md, design.md
+docs/                benchmarks.md, design.md, results/ (raw benchmark outputs), images/
 tests/
 ```
 
